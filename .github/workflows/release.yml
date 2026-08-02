@@ -1,0 +1,33 @@
+name: Release Executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Release Binary
+        run: cargo build --release
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/rust-image-viewer.exe
+          name: "v1.0.0 - Official Windows Release"
+          body: "Official pre-built executable for Windows (64-bit). Double-click to run without installation."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
