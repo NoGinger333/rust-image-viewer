@@ -1,0 +1,5 @@
+/target
+*.exe
+*.pdb
+rust_image_viewer_config.txt
+.DS_Store
