@@ -2,18 +2,20 @@
 name = "rust-image-viewer"
 version = "0.1.0"
 edition = "2021"
-authors = ["Antigravity Developer"]
-description = "A fast, modern, interactive image viewer written in Rust using eframe/egui."
 
 [dependencies]
 eframe = "0.28.1"
 egui = "0.28.1"
 egui_extras = { version = "0.28.1", features = ["image"] }
-image = { version = "0.25.1", features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+image = { version = "0.25.1", features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "ico"] }
 rfd = "0.14.1"
 poll-promise = "0.3.0"
 anyhow = "1.0"
 env_logger = "0.11"
+
+[build-dependencies]
+winres = "0.1"
+image = { version = "0.25.1", features = ["png", "jpeg", "ico"] }
 
 [profile.release]
 opt-level = 3          # 速度・実行パフォーマンス最優先
@@ -21,5 +23,3 @@ lto = true             # リンク時全域最適化 (Link Time Optimization)
 codegen-units = 1      # クレート全体を統合して最高精度の最適化
 panic = "abort"        # パニックアンワインドコードを除去して軽量・高速化
 strip = true           # 不要なシンボル情報を削除して.exeのサイズを激減
-
-
