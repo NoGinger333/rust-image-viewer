@@ -74,21 +74,30 @@ impl LoadedImage {
             img = Cow::Owned(img.flipv());
         }
 
-        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズを高品質フィルタで100%排除
-        if let Some((target_w, target_h)) = target_size {
+        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズを高品質CatmullRomフィルタで完全に抑制
+        if let Some((max_w, max_h)) = target_size {
             let (orig_w, orig_h) = img.dimensions();
-            if target_w > 0 && target_h > 0 && (orig_w > target_w * 5 / 4 || orig_h > target_h * 5 / 4) {
+            if max_w > 0 && max_h > 0 && (orig_w > max_w || orig_h > max_h) {
+                // アスペクト比を維持したリサイズ後の寸法計算
+                let ratio_x = max_w as f64 / orig_w as f64;
+                let ratio_y = max_h as f64 / orig_h as f64;
+                let ratio = ratio_x.min(ratio_y).min(1.0);
+
+                let fit_w = ((orig_w as f64 * ratio).round() as u32).max(1);
+                let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
+
                 let resized_buf = image::imageops::resize(
                     img.as_ref(),
-                    target_w,
-                    target_h,
-                    image::imageops::FilterType::Triangle,
+                    fit_w,
+                    fit_h,
+                    image::imageops::FilterType::CatmullRom,
                 );
                 let resized_img = DynamicImage::ImageRgba8(resized_buf);
                 let color_img = dynamic_image_to_color_image(&resized_img);
-                return (color_img, target_w, target_h);
+                return (color_img, fit_w, fit_h);
             }
         }
+
 
         if sharpen {
             let sharpened_buf = image::imageops::unsharpen(img.as_ref(), 1.2, 1);

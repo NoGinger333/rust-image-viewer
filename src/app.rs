@@ -576,7 +576,7 @@ impl eframe::App for ImageViewerApp {
             }
 
             // 画像なし状態のウェルカム画面
-            if self.texture_handle.is_none() {
+            if self.current_loaded_image.is_none() {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
                         ui.heading("📷 Rust 画像ビューア");
@@ -596,11 +596,25 @@ impl eframe::App for ImageViewerApp {
                 return;
             }
 
+            // 描画可能領域のサイズ
+            let available_size = ui.available_size();
+
+            // テクスチャが未作成の場合は画面解像度に合わせた高品質CatmullRomアンチモアレテクスチャを生成
+            if self.texture_handle.is_none() {
+                let ppp = ctx.pointer_latest_pos().map_or(1.0, |_| ctx.pixels_per_point());
+                let target_w = (available_size.x * ppp) as u32;
+                let target_h = (available_size.y * ppp) as u32;
+                self.update_texture_with_target_size(ctx, Some((target_w, target_h)));
+            }
+
+            if self.texture_handle.is_none() {
+                return;
+            }
+
+
             let texture = self.texture_handle.as_ref().unwrap();
             let tex_size = texture.size_vec2();
 
-            // 描画可能領域のサイズ
-            let available_size = ui.available_size();
 
             // ズーム倍率の計算
             let actual_zoom = match self.view_mode {
