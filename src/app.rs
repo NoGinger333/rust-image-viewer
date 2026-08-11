@@ -362,7 +362,7 @@ impl eframe::App for ImageViewerApp {
                     .on_hover_text("拡大")
                     .clicked()
                 {
-                    self.zoom_factor *= 1.4;
+                    self.zoom_factor *= 1.6;
                     self.view_mode = ViewMode::FreeZoom;
                 }
 
@@ -371,7 +371,7 @@ impl eframe::App for ImageViewerApp {
                     .on_hover_text("縮小")
                     .clicked()
                 {
-                    self.zoom_factor /= 1.4;
+                    self.zoom_factor /= 1.6;
                     self.view_mode = ViewMode::FreeZoom;
                 }
 
@@ -648,7 +648,7 @@ impl eframe::App for ImageViewerApp {
             } else if is_hovered {
                 if ctrl_pressed {
                     // Ctrl + ホイールスクロール = 拡大・縮小 (ズーム)
-                    let zoom_multiplier = (wheel_delta_y * 0.015).exp();
+                    let zoom_multiplier = (wheel_delta_y * 0.035).exp();
                     self.zoom_factor = (self.zoom_factor * zoom_multiplier).clamp(0.05, 50.0);
                     self.view_mode = ViewMode::FreeZoom;
                 } else {
