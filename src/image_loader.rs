@@ -49,8 +49,15 @@ impl LoadedImage {
     }
 
 
-    /// 回転・反転・シャープネス処理を行った新しい `ColorImage` を生成
-    pub fn transform_color_image(&self, rotation_deg: i32, flip_h: bool, flip_v: bool, sharpen: bool) -> (ColorImage, u32, u32) {
+    /// 回転・反転・シャープネス・モアレ防止ダウンサンプリング処理を行った新しい `ColorImage` を生成
+    pub fn transform_color_image(
+        &self,
+        rotation_deg: i32,
+        flip_h: bool,
+        flip_v: bool,
+        sharpen: bool,
+        target_size: Option<(u32, u32)>,
+    ) -> (ColorImage, u32, u32) {
         let mut img: Cow<DynamicImage> = Cow::Borrowed(&self.original_image);
 
         match (rotation_deg % 360 + 360) % 360 {
@@ -67,6 +74,22 @@ impl LoadedImage {
             img = Cow::Owned(img.flipv());
         }
 
+        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズを高品質フィルタで100%排除
+        if let Some((target_w, target_h)) = target_size {
+            let (orig_w, orig_h) = img.dimensions();
+            if target_w > 0 && target_h > 0 && (orig_w > target_w * 5 / 4 || orig_h > target_h * 5 / 4) {
+                let resized_buf = image::imageops::resize(
+                    img.as_ref(),
+                    target_w,
+                    target_h,
+                    image::imageops::FilterType::Triangle,
+                );
+                let resized_img = DynamicImage::ImageRgba8(resized_buf);
+                let color_img = dynamic_image_to_color_image(&resized_img);
+                return (color_img, target_w, target_h);
+            }
+        }
+
         if sharpen {
             let sharpened_buf = image::imageops::unsharpen(img.as_ref(), 1.2, 1);
             let sharpened = DynamicImage::ImageRgba8(sharpened_buf);
@@ -80,6 +103,7 @@ impl LoadedImage {
         (color_img, w, h)
     }
 }
+
 
 
 

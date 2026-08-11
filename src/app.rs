@@ -132,6 +132,8 @@ impl ImageViewerApp {
             self.current_index = idx;
         }
 
+        self.texture_handle = None;
+
         // キャッシュに既に存在する場合は即座に表示（Arc参照クローンによりO(1)爆速取得）
         if let Some(cached_image) = self.image_cache.get(&path).cloned() {
             self.current_loaded_image = Some(cached_image);
@@ -148,6 +150,7 @@ impl ImageViewerApp {
                 self.reset_view();
                 self.trigger_preloading();
             }
+
             Err(err) => {
                 self.error_message = Some(format!("画像の読み込みに失敗しました: {}", err));
             }
@@ -228,11 +231,11 @@ impl ImageViewerApp {
         self.view_mode = ViewMode::FitWindow;
     }
 
-    /// テクスチャの再生成 (完全にノイズのない高品質表示)
-    fn update_texture(&mut self, ctx: &Context) {
+    /// テクスチャの再生成 (モアレ防止の高品質アンチエイリアシング縮小適用)
+    fn update_texture_with_target_size(&mut self, ctx: &Context, target_size: Option<(u32, u32)>) {
         if let Some(ref loaded) = self.current_loaded_image {
             let (color_img, _w, _h) =
-                loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v, self.sharpen_enabled);
+                loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v, self.sharpen_enabled, target_size);
 
             let handle = ctx.load_texture(
                 "current_image",
@@ -242,6 +245,12 @@ impl ImageViewerApp {
             self.texture_handle = Some(handle);
         }
     }
+
+    fn update_texture(&mut self, ctx: &Context) {
+        self.update_texture_with_target_size(ctx, None);
+    }
+
+
 
 
 
