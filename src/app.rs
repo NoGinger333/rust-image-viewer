@@ -596,31 +596,23 @@ impl eframe::App for ImageViewerApp {
                 return;
             }
 
+            let loaded = self.current_loaded_image.as_ref().unwrap();
+
             // 描画可能領域のサイズ
             let available_size = ui.available_size();
 
-            // テクスチャが未作成の場合は画面解像度に合わせた高品質CatmullRomアンチモアレテクスチャを生成
-            if self.texture_handle.is_none() {
-                let ppp = ctx.pointer_latest_pos().map_or(1.0, |_| ctx.pixels_per_point());
-                let target_w = (available_size.x * ppp) as u32;
-                let target_h = (available_size.y * ppp) as u32;
-                self.update_texture_with_target_size(ctx, Some((target_w, target_h)));
-            }
-
-            if self.texture_handle.is_none() {
-                return;
-            }
-
-
-            let texture = self.texture_handle.as_ref().unwrap();
-            let tex_size = texture.size_vec2();
-
+            let rot = (self.rotation_deg % 360 + 360) % 360;
+            let (disp_w, disp_h) = if rot == 90 || rot == 270 {
+                (loaded.height, loaded.width)
+            } else {
+                (loaded.width, loaded.height)
+            };
 
             // ズーム倍率の計算
             let actual_zoom = match self.view_mode {
                 ViewMode::FitWindow => {
-                    let scale_x = available_size.x / tex_size.x;
-                    let scale_y = available_size.y / tex_size.y;
+                    let scale_x = available_size.x / disp_w as f32;
+                    let scale_y = available_size.y / disp_h as f32;
                     scale_x.min(scale_y).min(10.0)
                 }
                 ViewMode::OriginalSize => 1.0,
@@ -631,8 +623,29 @@ impl eframe::App for ImageViewerApp {
                 self.zoom_factor = actual_zoom;
             }
 
+            // 現在の解像度 target_w, target_h を算出
+            let ppp = ctx.pixels_per_point();
+            let target_w = ((disp_w as f32 * actual_zoom * ppp).round() as u32).max(1);
+            let target_h = ((disp_h as f32 * actual_zoom * ppp).round() as u32).max(1);
+
+            // テクスチャが未作成の場合は画面解像度に合わせたテクスチャを生成
+            if self.texture_handle.is_none() {
+                let target_size = if actual_zoom < 0.99 {
+                    Some((target_w, target_h))
+                } else {
+                    None
+                };
+                self.update_texture_with_target_size(ctx, target_size);
+            }
+
+            if self.texture_handle.is_none() {
+                return;
+            }
+
+            let texture = self.texture_handle.as_ref().unwrap();
+
             // 表示する最終描画サイズ
-            let display_size = tex_size * actual_zoom;
+            let display_size = Vec2::new(disp_w as f32 * actual_zoom, disp_h as f32 * actual_zoom);
 
             let mut pending_navigation: Option<isize> = None;
 

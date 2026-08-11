@@ -15,6 +15,7 @@ const SUPPORTED_EXTENSIONS: &[&str] = &[
 pub struct LoadedImage {
     pub path: PathBuf,
     pub original_image: Arc<DynamicImage>,
+    pub mipmaps: Vec<Arc<DynamicImage>>,
     pub width: u32,
     pub height: u32,
     pub file_size_bytes: u64,
@@ -39,9 +40,27 @@ impl LoadedImage {
 
         let (width, height) = dynamic_img.dimensions();
 
+        // 0.5倍ずつ段階的に縮小したミップマップピラミッドを事前構築
+        let mut mipmaps = Vec::new();
+        let mut current_img = dynamic_img.clone();
+        while current_img.width() > 128 && current_img.height() > 128 {
+            let next_w = (current_img.width() / 2).max(1);
+            let next_h = (current_img.height() / 2).max(1);
+            let resized_buf = image::imageops::resize(
+                &current_img,
+                next_w,
+                next_h,
+                image::imageops::FilterType::Triangle,
+            );
+            let next_img = DynamicImage::ImageRgba8(resized_buf);
+            mipmaps.push(Arc::new(next_img.clone()));
+            current_img = next_img;
+        }
+
         Ok(Self {
             path,
             original_image: Arc::new(dynamic_img),
+            mipmaps,
             width,
             height,
             file_size_bytes,
@@ -58,25 +77,17 @@ impl LoadedImage {
         sharpen: bool,
         target_size: Option<(u32, u32)>,
     ) -> (ColorImage, u32, u32) {
-        let mut img: Cow<DynamicImage> = Cow::Borrowed(&self.original_image);
+        let rot = (rotation_deg % 360 + 360) % 360;
+        let is_swapped = rot == 90 || rot == 270;
 
-        match (rotation_deg % 360 + 360) % 360 {
-            90 => img = Cow::Owned(img.rotate90()),
-            180 => img = Cow::Owned(img.rotate180()),
-            270 => img = Cow::Owned(img.rotate270()),
-            _ => {}
-        }
+        let (orig_w, orig_h) = if is_swapped {
+            (self.height, self.width)
+        } else {
+            (self.width, self.height)
+        };
 
-        if flip_h {
-            img = Cow::Owned(img.fliph());
-        }
-        if flip_v {
-            img = Cow::Owned(img.flipv());
-        }
-
-        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズを高品質CatmullRomフィルタで完全に抑制
+        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズをミップマップピラミッド + CatmullRom フィルタで完全に抑制
         if let Some((max_w, max_h)) = target_size {
-            let (orig_w, orig_h) = img.dimensions();
             if max_w > 0 && max_h > 0 && (orig_w > max_w || orig_h > max_h) {
                 // アスペクト比を維持したリサイズ後の寸法計算
                 let ratio_x = max_w as f64 / orig_w as f64;
@@ -85,6 +96,42 @@ impl LoadedImage {
 
                 let fit_w = ((orig_w as f64 * ratio).round() as u32).max(1);
                 let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
+
+                // target_w, target_h (fit_w, fit_h) 以上で最小のミップマップ level を mipmaps から選出
+                let mut chosen_mipmap: Option<&Arc<DynamicImage>> = None;
+                for m in &self.mipmaps {
+                    let (mw, mh) = if is_swapped {
+                        (m.height(), m.width())
+                    } else {
+                        (m.width(), m.height())
+                    };
+                    if mw >= fit_w && mh >= fit_h {
+                        chosen_mipmap = Some(m);
+                    } else {
+                        break;
+                    }
+                }
+
+                // 選出したソース画像（ミップマップまたは原寸画像）
+                let source_dynamic: Cow<DynamicImage> = match chosen_mipmap {
+                    Some(m) => Cow::Borrowed(m.as_ref()),
+                    None => Cow::Borrowed(&self.original_image),
+                };
+
+                let mut img = source_dynamic;
+                match rot {
+                    90 => img = Cow::Owned(img.rotate90()),
+                    180 => img = Cow::Owned(img.rotate180()),
+                    270 => img = Cow::Owned(img.rotate270()),
+                    _ => {}
+                }
+
+                if flip_h {
+                    img = Cow::Owned(img.fliph());
+                }
+                if flip_v {
+                    img = Cow::Owned(img.flipv());
+                }
 
                 let resized_buf = image::imageops::resize(
                     img.as_ref(),
@@ -98,6 +145,21 @@ impl LoadedImage {
             }
         }
 
+        let mut img: Cow<DynamicImage> = Cow::Borrowed(&self.original_image);
+
+        match rot {
+            90 => img = Cow::Owned(img.rotate90()),
+            180 => img = Cow::Owned(img.rotate180()),
+            270 => img = Cow::Owned(img.rotate270()),
+            _ => {}
+        }
+
+        if flip_h {
+            img = Cow::Owned(img.fliph());
+        }
+        if flip_v {
+            img = Cow::Owned(img.flipv());
+        }
 
         if sharpen {
             let sharpened_buf = image::imageops::unsharpen(img.as_ref(), 1.2, 1);
