@@ -47,8 +47,8 @@ impl LoadedImage {
     }
 
 
-    /// 回転・反転処理を行った新しい `ColorImage` を生成
-    pub fn transform_color_image(&self, rotation_deg: i32, flip_h: bool, flip_v: bool) -> (ColorImage, u32, u32) {
+    /// 回転・反転・シャープネス処理を行った新しい `ColorImage` を生成
+    pub fn transform_color_image(&self, rotation_deg: i32, flip_h: bool, flip_v: bool, sharpen: bool) -> (ColorImage, u32, u32) {
         let mut img = self.original_image.clone();
 
         match (rotation_deg % 360 + 360) % 360 {
@@ -65,11 +65,20 @@ impl LoadedImage {
             img = img.flipv();
         }
 
+        if sharpen {
+            let sharpened_buf = image::imageops::unsharpen(&img, 1.2, 1);
+            let sharpened = DynamicImage::ImageRgba8(sharpened_buf);
+            let (w, h) = sharpened.dimensions();
+            let color_img = dynamic_image_to_color_image(&sharpened);
+            return (color_img, w, h);
+        }
+
         let (w, h) = img.dimensions();
         let color_img = dynamic_image_to_color_image(&img);
         (color_img, w, h)
     }
 }
+
 
 
 

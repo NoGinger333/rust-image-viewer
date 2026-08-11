@@ -44,6 +44,10 @@ pub struct ImageViewerApp {
     show_sidebar: bool,
     error_message: Option<String>,
 
+    /// 表示補正設定
+    sharpen_enabled: bool,
+    use_nearest_filter: bool,
+
     /// ホイールによるページ移動用ロック＆タイマー
     scroll_locked: bool,
     last_scroll_navigate_time: std::time::Instant,
@@ -85,11 +89,14 @@ impl Default for ImageViewerApp {
             view_mode: ViewMode::FitWindow,
             show_sidebar: load_sidebar_config(),
             error_message: None,
+            sharpen_enabled: false,
+            use_nearest_filter: true,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
         }
     }
 }
+
 
 
 impl ImageViewerApp {
@@ -225,11 +232,17 @@ impl ImageViewerApp {
     fn update_texture(&mut self, ctx: &Context) {
         if let Some(ref loaded) = self.current_loaded_image {
             let (color_img, _w, _h) =
-                loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v);
-            // テクスチャ補間の最適化：縮小時 (minification) に文字線がぼやけない Nearest 補間を適用
-            let mut texture_options = egui::TextureOptions::NEAREST;
-            texture_options.magnification = egui::TextureFilter::Linear;
-            texture_options.minification = egui::TextureFilter::Nearest;
+                loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v, self.sharpen_enabled);
+
+            let texture_options = if self.use_nearest_filter {
+                let mut opts = egui::TextureOptions::NEAREST;
+                opts.magnification = egui::TextureFilter::Linear;
+                opts.minification = egui::TextureFilter::Nearest;
+                opts
+            } else {
+                egui::TextureOptions::LINEAR
+            };
+
             let handle = ctx.load_texture(
                 "current_image",
                 color_img,
@@ -238,6 +251,7 @@ impl ImageViewerApp {
             self.texture_handle = Some(handle);
         }
     }
+
 
 
 }
@@ -395,7 +409,30 @@ impl eframe::App for ImageViewerApp {
 
                 ui.separator();
 
+                // 表示補正トグルボタン
+                if ui
+                    .selectable_label(self.sharpen_enabled, icon_style("✒"))
+                    .on_hover_text("文字くっきり (シャープネス補正) ON/OFF")
+                    .clicked()
+                {
+                    self.sharpen_enabled = !self.sharpen_enabled;
+                    self.update_texture(ctx);
+                }
+
+                if ui
+                    .selectable_label(self.use_nearest_filter, icon_style("🎯"))
+                    .on_hover_text("縮小文字のぼやけ防止 (シャープ補間 / スムース補間) 切替")
+                    .clicked()
+                {
+                    self.use_nearest_filter = !self.use_nearest_filter;
+                    self.update_texture(ctx);
+                }
+
+                ui.separator();
+
+
                 // 回転・反転
+
                 if ui
                     .add(egui::Button::new(icon_style("⟳")).frame(false))
                     .on_hover_text("90°時計回りに回転")
