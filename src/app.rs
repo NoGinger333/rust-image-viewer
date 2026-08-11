@@ -226,14 +226,20 @@ impl ImageViewerApp {
         if let Some(ref loaded) = self.current_loaded_image {
             let (color_img, _w, _h) =
                 loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v);
+            // テクスチャ補間の最適化：縮小時 (minification) に文字線がぼやけない Nearest 補間を適用
+            let mut texture_options = egui::TextureOptions::NEAREST;
+            texture_options.magnification = egui::TextureFilter::Linear;
+            texture_options.minification = egui::TextureFilter::Nearest;
             let handle = ctx.load_texture(
                 "current_image",
                 color_img,
-                egui::TextureOptions::LINEAR,
+                texture_options,
             );
             self.texture_handle = Some(handle);
         }
     }
+
+
 }
 
 impl eframe::App for ImageViewerApp {

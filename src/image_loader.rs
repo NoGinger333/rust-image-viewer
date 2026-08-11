@@ -65,15 +65,12 @@ impl LoadedImage {
             img = img.flipv();
         }
 
-        // マンガのセリフ・細線の輪郭をクッキリ保つ常時シャープネス補正 (アンシャープマスク)
-        let sharpened_buf = image::imageops::unsharpen(&img, 1.2, 1);
-        let sharpened = DynamicImage::ImageRgba8(sharpened_buf);
-
-        let (w, h) = sharpened.dimensions();
-        let color_img = dynamic_image_to_color_image(&sharpened);
+        let (w, h) = img.dimensions();
+        let color_img = dynamic_image_to_color_image(&img);
         (color_img, w, h)
     }
 }
+
 
 
 
