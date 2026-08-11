@@ -650,31 +650,16 @@ impl eframe::App for ImageViewerApp {
 
             let mut should_update = self.texture_handle.is_none();
 
-            if !should_update {
-                match (self.rendered_target_size, target_size) {
-                    (None, Some(_)) | (Some(_), None) => {
-                        should_update = true;
-                    }
-                    (Some((rw, rh)), Some((tw, th))) => {
-                        let ratio_w = (tw as f32 - rw as f32).abs() / rw as f32;
-                        let ratio_h = (th as f32 - rh as f32).abs() / rh as f32;
+            if !should_update && self.rendered_target_size != target_size {
+                if self.last_target_size != target_size {
+                    self.last_target_size = target_size;
+                    self.last_target_size_change_time = std::time::Instant::now();
+                }
 
-                        if ratio_w >= 0.12 || ratio_h >= 0.12 {
-                            should_update = true;
-                        } else if self.rendered_target_size != target_size {
-                            if self.last_target_size != target_size {
-                                self.last_target_size = target_size;
-                                self.last_target_size_change_time = std::time::Instant::now();
-                            }
-
-                            if self.last_target_size_change_time.elapsed().as_millis() > 150 {
-                                should_update = true;
-                            } else {
-                                ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                            }
-                        }
-                    }
-                    (None, None) => {}
+                if self.last_target_size_change_time.elapsed().as_millis() >= 180 {
+                    should_update = true;
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(20));
                 }
             }
 
