@@ -82,7 +82,7 @@ impl LoadedImage {
             img = Cow::Owned(img.flipv());
         }
 
-        // 高精度リサンプリング (マルチパス・エリアアベレージング ＋ 仕上げ Lanczos3 フィルター)
+        // 高精度リサンプリング (単一 Lanczos3 フィルター)
         if let Some((max_w, max_h)) = target_size {
             if max_w > 0 && max_h > 0 {
                 // アスペクト比を維持したリサイズ後の寸法計算
@@ -94,34 +94,14 @@ impl LoadedImage {
                 let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
 
                 if fit_w < orig_w || fit_h < orig_h {
-                    let mut curr_img = img.into_owned();
-
-                    // 1. 縮小率が大きな場合（幅・高さが目標の 2 倍以上大きい場合）、
-                    //    FilterType::Triangle (Area-Average Box) で 0.5倍 ずつ段階的にダウンスケール
-                    while curr_img.width() >= fit_w * 2 && curr_img.height() >= fit_h * 2 {
-                        let next_w = (curr_img.width() / 2).max(1);
-                        let next_h = (curr_img.height() / 2).max(1);
-                        let resized_buf = image::imageops::resize(
-                            &curr_img,
-                            next_w,
-                            next_h,
-                            image::imageops::FilterType::Triangle,
-                        );
-                        curr_img = DynamicImage::ImageRgba8(resized_buf);
-                    }
-
-                    // 2. 目標サイズの 1〜2 倍の大きさになった時点で、最後の微調整仕上げに FilterType::Lanczos3 を適用
-                    if curr_img.width() != fit_w || curr_img.height() != fit_h {
-                        let final_buf = image::imageops::resize(
-                            &curr_img,
-                            fit_w,
-                            fit_h,
-                            image::imageops::FilterType::Lanczos3,
-                        );
-                        curr_img = DynamicImage::ImageRgba8(final_buf);
-                    }
-
-                    let color_img = dynamic_image_to_color_image(&curr_img);
+                    let resized_buf = image::imageops::resize(
+                        img.as_ref(),
+                        fit_w,
+                        fit_h,
+                        image::imageops::FilterType::Lanczos3,
+                    );
+                    let resized_img = DynamicImage::ImageRgba8(resized_buf);
+                    let color_img = dynamic_image_to_color_image(&resized_img);
                     return (color_img, fit_w, fit_h);
                 }
             }
