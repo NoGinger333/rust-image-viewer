@@ -49,6 +49,7 @@ pub struct ImageViewerApp {
     /// 表示補正設定
     sharpen_enabled: bool,
     use_nearest_filter: bool,
+    anti_moire_enabled: bool,
 
     /// ホイールによるページ移動用ロック＆タイマー
     scroll_locked: bool,
@@ -94,6 +95,7 @@ impl Default for ImageViewerApp {
             error_message: None,
             sharpen_enabled: false,
             use_nearest_filter: false,
+            anti_moire_enabled: false,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
         }
@@ -241,7 +243,14 @@ impl ImageViewerApp {
     fn update_texture_with_target_size(&mut self, ctx: &Context, target_size: Option<(u32, u32)>) {
         if let Some(ref loaded) = self.current_loaded_image {
             let (color_img, _w, _h) =
-                loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v, self.sharpen_enabled, target_size);
+                loaded.transform_color_image(
+                    self.rotation_deg,
+                    self.flip_h,
+                    self.flip_v,
+                    self.sharpen_enabled,
+                    self.anti_moire_enabled,
+                    target_size,
+                );
 
             let handle = ctx.load_texture(
                 "current_image",
@@ -430,6 +439,15 @@ impl eframe::App for ImageViewerApp {
                     .clicked()
                 {
                     self.use_nearest_filter = !self.use_nearest_filter;
+                    self.update_texture(ctx);
+                }
+
+                if ui
+                    .selectable_label(self.anti_moire_enabled, icon_style("🌫️"))
+                    .on_hover_text("トーンモアレ防止補正")
+                    .clicked()
+                {
+                    self.anti_moire_enabled = !self.anti_moire_enabled;
                     self.update_texture(ctx);
                 }
 

@@ -75,6 +75,7 @@ impl LoadedImage {
         flip_h: bool,
         flip_v: bool,
         sharpen: bool,
+        anti_moire: bool,
         target_size: Option<(u32, u32)>,
     ) -> (ColorImage, u32, u32) {
         let rot = (rotation_deg % 360 + 360) % 360;
@@ -86,7 +87,7 @@ impl LoadedImage {
             (self.width, self.height)
         };
 
-        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズをミップマップピラミッド + CatmullRom フィルタで完全に抑制
+        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズをミップマップピラミッド + CatmullRom フィルタで抑制
         if let Some((max_w, max_h)) = target_size {
             if max_w > 0 && max_h > 0 {
                 // アスペクト比を維持したリサイズ後の寸法計算
@@ -134,15 +135,23 @@ impl LoadedImage {
                         img = Cow::Owned(img.flipv());
                     }
 
-                    let blurred = image::imageops::blur(img.as_ref(), 0.45);
-                    let blurred_img = DynamicImage::ImageRgba8(blurred);
-
-                    let resized_buf = image::imageops::resize(
-                        &blurred_img,
-                        fit_w,
-                        fit_h,
-                        image::imageops::FilterType::CatmullRom,
-                    );
+                    let resized_buf = if anti_moire {
+                        let blurred = image::imageops::blur(img.as_ref(), 0.45);
+                        let blurred_img = DynamicImage::ImageRgba8(blurred);
+                        image::imageops::resize(
+                            &blurred_img,
+                            fit_w,
+                            fit_h,
+                            image::imageops::FilterType::CatmullRom,
+                        )
+                    } else {
+                        image::imageops::resize(
+                            img.as_ref(),
+                            fit_w,
+                            fit_h,
+                            image::imageops::FilterType::Lanczos3,
+                        )
+                    };
                     let resized_img = DynamicImage::ImageRgba8(resized_buf);
                     let color_img = dynamic_image_to_color_image(&resized_img);
                     return (color_img, fit_w, fit_h);
