@@ -15,7 +15,6 @@ const SUPPORTED_EXTENSIONS: &[&str] = &[
 pub struct LoadedImage {
     pub path: PathBuf,
     pub original_image: Arc<DynamicImage>,
-    pub mipmaps: Vec<Arc<DynamicImage>>,
     pub width: u32,
     pub height: u32,
     pub file_size_bytes: u64,
@@ -40,27 +39,9 @@ impl LoadedImage {
 
         let (width, height) = dynamic_img.dimensions();
 
-        // 0.5倍ずつ段階的に縮小したミップマップピラミッドを事前構築
-        let mut mipmaps = Vec::new();
-        let mut current_img = dynamic_img.clone();
-        while current_img.width() > 128 && current_img.height() > 128 {
-            let next_w = (current_img.width() / 2).max(1);
-            let next_h = (current_img.height() / 2).max(1);
-            let resized_buf = image::imageops::resize(
-                &current_img,
-                next_w,
-                next_h,
-                image::imageops::FilterType::Triangle,
-            );
-            let next_img = DynamicImage::ImageRgba8(resized_buf);
-            mipmaps.push(Arc::new(next_img.clone()));
-            current_img = next_img;
-        }
-
         Ok(Self {
             path,
             original_image: Arc::new(dynamic_img),
-            mipmaps,
             width,
             height,
             file_size_bytes,
@@ -68,14 +49,13 @@ impl LoadedImage {
     }
 
 
-    /// 回転・反転・シャープネス・モアレ防止ダウンサンプリング処理を行った新しい `ColorImage` を生成
+    /// 回転・反転・シャープネス・高品質ダウンサンプリング処理を行った新しい `ColorImage` を生成
     pub fn transform_color_image(
         &self,
         rotation_deg: i32,
         flip_h: bool,
         flip_v: bool,
         sharpen: bool,
-        anti_moire: bool,
         target_size: Option<(u32, u32)>,
     ) -> (ColorImage, u32, u32) {
         let rot = (rotation_deg % 360 + 360) % 360;
@@ -86,78 +66,6 @@ impl LoadedImage {
         } else {
             (self.width, self.height)
         };
-
-        // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズをミップマップピラミッド + CatmullRom フィルタで抑制
-        if let Some((max_w, max_h)) = target_size {
-            if max_w > 0 && max_h > 0 {
-                // アスペクト比を維持したリサイズ後の寸法計算
-                let ratio_x = max_w as f64 / orig_w as f64;
-                let ratio_y = max_h as f64 / orig_h as f64;
-                let ratio = ratio_x.min(ratio_y).min(1.0);
-
-                let fit_w = ((orig_w as f64 * ratio).round() as u32).max(1);
-                let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
-
-                if fit_w < orig_w || fit_h < orig_h {
-                    // target_w, target_h (fit_w, fit_h) 以上で最小のミップマップ level を mipmaps から選出
-                    let mut chosen_mipmap: Option<&Arc<DynamicImage>> = None;
-                    for m in &self.mipmaps {
-                        let (mw, mh) = if is_swapped {
-                            (m.height(), m.width())
-                        } else {
-                            (m.width(), m.height())
-                        };
-                        if mw >= fit_w && mh >= fit_h {
-                            chosen_mipmap = Some(m);
-                        } else {
-                            break;
-                        }
-                    }
-
-                    // 選出したソース画像（ミップマップまたは原寸画像）
-                    let source_dynamic: Cow<DynamicImage> = match chosen_mipmap {
-                        Some(m) => Cow::Borrowed(m.as_ref()),
-                        None => Cow::Borrowed(&self.original_image),
-                    };
-
-                    let mut img = source_dynamic;
-                    match rot {
-                        90 => img = Cow::Owned(img.rotate90()),
-                        180 => img = Cow::Owned(img.rotate180()),
-                        270 => img = Cow::Owned(img.rotate270()),
-                        _ => {}
-                    }
-
-                    if flip_h {
-                        img = Cow::Owned(img.fliph());
-                    }
-                    if flip_v {
-                        img = Cow::Owned(img.flipv());
-                    }
-
-                    let resized_buf = if anti_moire {
-                        let blurred = image::imageops::blur(img.as_ref(), 0.45);
-                        let blurred_img = DynamicImage::ImageRgba8(blurred);
-                        image::imageops::resize(
-                            &blurred_img,
-                            fit_w,
-                            fit_h,
-                            image::imageops::FilterType::CatmullRom,
-                        )
-                    } else {
-                        image::imageops::resize(
-                            img.as_ref(),
-                            fit_w,
-                            fit_h,
-                            image::imageops::FilterType::Lanczos3,
-                        )
-                    };
-                    let resized_img = DynamicImage::ImageRgba8(resized_buf);
-                    let color_img = dynamic_image_to_color_image(&resized_img);
-                    return (color_img, fit_w, fit_h);
-                }
-            }
-        }
 
         let mut img: Cow<DynamicImage> = Cow::Borrowed(&self.original_image);
 
@@ -173,6 +81,56 @@ impl LoadedImage {
         }
         if flip_v {
             img = Cow::Owned(img.flipv());
+        }
+
+        // 高精度リサンプリング (マルチパス・エリアアベレージング ＋ 仕上げ Lanczos3 フィルター)
+        if let Some((max_w, max_h)) = target_size {
+            if max_w > 0 && max_h > 0 {
+                // アスペクト比を維持したリサイズ後の寸法計算
+                let ratio_x = max_w as f64 / orig_w as f64;
+                let ratio_y = max_h as f64 / orig_h as f64;
+                let ratio = ratio_x.min(ratio_y).min(1.0);
+
+                let fit_w = ((orig_w as f64 * ratio).round() as u32).max(1);
+                let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
+
+                if fit_w < orig_w || fit_h < orig_h {
+                    let mut curr_img = img.into_owned();
+
+                    // 1. 縮小率が大きな場合（幅・高さが目標の 2 倍以上大きい場合）、
+                    //    FilterType::Triangle (Area-Average Box) で 0.5倍 ずつ段階的にダウンスケール
+                    while curr_img.width() >= fit_w * 2 && curr_img.height() >= fit_h * 2 {
+                        let next_w = (curr_img.width() / 2).max(1);
+                        let next_h = (curr_img.height() / 2).max(1);
+                        let resized_buf = image::imageops::resize(
+                            &curr_img,
+                            next_w,
+                            next_h,
+                            image::imageops::FilterType::Triangle,
+                        );
+                        curr_img = DynamicImage::ImageRgba8(resized_buf);
+                    }
+
+                    // 2. 目標サイズの 1〜2 倍の大きさになった時点で、最後の微調整仕上げに FilterType::Lanczos3 を適用
+                    if curr_img.width() != fit_w || curr_img.height() != fit_h {
+                        let final_buf = image::imageops::resize(
+                            &curr_img,
+                            fit_w,
+                            fit_h,
+                            image::imageops::FilterType::Lanczos3,
+                        );
+                        curr_img = DynamicImage::ImageRgba8(final_buf);
+                    }
+
+                    if sharpen {
+                        let sharpened_buf = image::imageops::unsharpen(&curr_img, 1.2, 1);
+                        curr_img = DynamicImage::ImageRgba8(sharpened_buf);
+                    }
+
+                    let color_img = dynamic_image_to_color_image(&curr_img);
+                    return (color_img, fit_w, fit_h);
+                }
+            }
         }
 
         if sharpen {
