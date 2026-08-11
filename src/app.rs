@@ -581,37 +581,41 @@ impl eframe::App for ImageViewerApp {
             let response = ui.allocate_response(available_size, Sense::click_and_drag());
             let is_hovered = ui.rect_contains_pointer(ui.max_rect());
 
-            // スクロール量の取得
-            let scroll_y = ui.input(|i| {
-                if i.smooth_scroll_delta.y != 0.0 {
-                    i.smooth_scroll_delta.y
-                } else {
-                    i.raw_scroll_delta.y
+            // スクロール入力の取得：MouseWheel イベント優先で画面間の描画ラグ・高速デコードによる連続暴発を完全防止
+            let mut wheel_delta_y = 0.0f32;
+            ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::MouseWheel { delta, .. } = event {
+                        wheel_delta_y += delta.y;
+                    }
                 }
             });
 
-            let ctrl_pressed = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
-
-            // スクロール制御：高速連打スクロール中であっても200ms経過でロックを自動解放
-            let elapsed_ms = self.last_scroll_navigate_time.elapsed().as_millis();
-            if elapsed_ms >= 200 {
-                self.scroll_locked = false;
+            if wheel_delta_y == 0.0 {
+                wheel_delta_y = ui.input(|i| i.raw_scroll_delta.y);
             }
 
-            if scroll_y != 0.0 && is_hovered {
+            let ctrl_pressed = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+            let elapsed_ms = self.last_scroll_navigate_time.elapsed().as_millis();
+
+            if wheel_delta_y == 0.0 {
+                if elapsed_ms > 150 {
+                    self.scroll_locked = false;
+                }
+            } else if is_hovered {
                 if ctrl_pressed {
                     // Ctrl + ホイールスクロール = 拡大・縮小 (ズーム)
-                    let zoom_multiplier = (scroll_y * 0.0015).exp();
+                    let zoom_multiplier = (wheel_delta_y * 0.0015).exp();
                     self.zoom_factor = (self.zoom_factor * zoom_multiplier).clamp(0.05, 50.0);
                     self.view_mode = ViewMode::FreeZoom;
                 } else {
-                    // 通常のマウスホイール = ページ送り (1スクロール1枚、高速回転時も途中で詰まらない)
-                    if !self.scroll_locked {
-                        if scroll_y < -0.3 {
+                    // 通常のマウスホイール = ページ送り (爆速デコード画像群でも絶対に1ノッチ1枚固定)
+                    if !self.scroll_locked && elapsed_ms > 180 {
+                        if wheel_delta_y < -0.05 {
                             pending_navigation = Some(1); // 下スクロール -> 次の画像へ
                             self.scroll_locked = true;
                             self.last_scroll_navigate_time = std::time::Instant::now();
-                        } else if scroll_y > 0.3 {
+                        } else if wheel_delta_y > 0.05 {
                             pending_navigation = Some(-1); // 上スクロール -> 前の画像へ
                             self.scroll_locked = true;
                             self.last_scroll_navigate_time = std::time::Instant::now();
@@ -619,6 +623,7 @@ impl eframe::App for ImageViewerApp {
                     }
                 }
             }
+
 
 
 
