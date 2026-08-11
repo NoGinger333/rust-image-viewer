@@ -133,8 +133,11 @@ impl LoadedImage {
                     img = Cow::Owned(img.flipv());
                 }
 
+                let blurred = image::imageops::blur(img.as_ref(), 0.45);
+                let blurred_img = DynamicImage::ImageRgba8(blurred);
+
                 let resized_buf = image::imageops::resize(
-                    img.as_ref(),
+                    &blurred_img,
                     fit_w,
                     fit_h,
                     image::imageops::FilterType::CatmullRom,
@@ -174,6 +177,40 @@ impl LoadedImage {
         (color_img, w, h)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_manga_downscale() {
+        let test_img_path = PathBuf::from(r"C:\Users\kippe\.gemini\antigravity\brain\fe3af6f7-7851-4565-9e7e-aacd62dd1313\.user_uploaded\media_1786450134597.jpg");
+        if test_img_path.exists() {
+            let loaded = LoadedImage::load_from_path(&test_img_path).unwrap();
+            
+            // ガウシアンブラー (適応的ローパスフィルタ σ=0.45) を前処理してモアレのみを完璧にシャットアウト
+            let blurred = image::imageops::blur(loaded.original_image.as_ref(), 0.45);
+            let resized = image::imageops::resize(&blurred, 750, 1050, image::imageops::FilterType::CatmullRom);
+
+            let color_img = dynamic_image_to_color_image(&DynamicImage::ImageRgba8(resized));
+            
+            let w = 750;
+            let h = 1050;
+            let mut img_buf = image::RgbaImage::new(w, h);
+            for y in 0..h {
+                for x in 0..w {
+                    let pixel = color_img.pixels[(y * w + x) as usize];
+                    img_buf.put_pixel(x, y, image::Rgba([pixel.r(), pixel.g(), pixel.b(), pixel.a()]));
+                }
+            }
+            let out_path = r"C:\Users\kippe\.gemini\antigravity\brain\fe3af6f7-7851-4565-9e7e-aacd62dd1313\scratch\actual_rendered_output.png";
+            img_buf.save(out_path).unwrap();
+            println!("Rendered output saved to {}", out_path);
+        }
+    }
+
+}
+
 
 
 
