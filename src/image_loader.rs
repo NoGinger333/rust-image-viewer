@@ -18,6 +18,7 @@ pub struct LoadedImage {
     pub width: u32,
     pub height: u32,
     pub file_size_bytes: u64,
+    pub format_name: String,
 }
 
 impl LoadedImage {
@@ -33,6 +34,15 @@ impl LoadedImage {
             .with_guessed_format()
             .with_context(|| format!("Failed to guess format for {:?}", path))?;
 
+        let format_name = reader.format()
+            .map(|f| format!("{:?}", f))
+            .unwrap_or_else(|| {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("Unknown")
+                    .to_uppercase()
+            });
+
         let dynamic_img = reader
             .decode()
             .with_context(|| format!("Failed to decode image {:?}", path))?;
@@ -45,6 +55,7 @@ impl LoadedImage {
             width,
             height,
             file_size_bytes,
+            format_name,
         })
     }
 

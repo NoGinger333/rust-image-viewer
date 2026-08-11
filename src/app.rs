@@ -307,6 +307,51 @@ impl eframe::App for ImageViewerApp {
             if i.key_pressed(egui::Key::ArrowRight) {
                 self.navigate_image(1);
             }
+            if i.key_pressed(egui::Key::Home) {
+                if !self.image_list.is_empty() {
+                    self.current_index = 0;
+                    let path = self.image_list[self.current_index].clone();
+                    self.open_image_file(path);
+                }
+            }
+            if i.key_pressed(egui::Key::End) {
+                if !self.image_list.is_empty() {
+                    self.current_index = self.image_list.len() - 1;
+                    let path = self.image_list[self.current_index].clone();
+                    self.open_image_file(path);
+                }
+            }
+            if i.key_pressed(egui::Key::Escape) {
+                self.reset_view();
+                self.update_texture(ctx);
+            }
+            if i.key_pressed(egui::Key::Delete) {
+                if let Some(ref img) = self.current_loaded_image {
+                    let confirm = rfd::MessageDialog::new()
+                        .set_title("削除の確認")
+                        .set_description("本当に削除しますか？")
+                        .set_buttons(rfd::MessageButtons::YesNo)
+                        .show();
+                    if confirm == rfd::MessageDialogResult::Yes {
+                        if std::fs::remove_file(&img.path).is_ok() {
+                            let path = img.path.clone();
+                            self.image_list.retain(|p| p != &path);
+                            self.image_cache.remove(&path);
+                            if self.image_list.is_empty() {
+                                self.current_loaded_image = None;
+                                self.texture_handle = None;
+                                self.rendered_target_size = None;
+                            } else {
+                                if self.current_index >= self.image_list.len() {
+                                    self.current_index = self.image_list.len() - 1;
+                                }
+                                let next_path = self.image_list[self.current_index].clone();
+                                self.open_image_file(next_path);
+                            }
+                        }
+                    }
+                }
+            }
             if i.key_pressed(egui::Key::R) {
                 self.reset_view();
             }
@@ -361,6 +406,22 @@ impl eframe::App for ImageViewerApp {
                 {
                     self.show_sidebar = !self.show_sidebar;
                     save_sidebar_config(self.show_sidebar);
+                }
+
+                ui.separator();
+
+                if ui.add_enabled(!self.image_list.is_empty(), egui::Button::new(icon_style("◀")).frame(false))
+                    .on_hover_text("前の画像")
+                    .clicked()
+                {
+                    self.navigate_image(-1);
+                }
+                
+                if ui.add_enabled(!self.image_list.is_empty(), egui::Button::new(icon_style("▶")).frame(false))
+                    .on_hover_text("次の画像")
+                    .clicked()
+                {
+                    self.navigate_image(1);
                 }
 
                 ui.separator();
@@ -503,6 +564,8 @@ impl eframe::App for ImageViewerApp {
                     ui.label(format!("🔍 {:.0}%", self.zoom_factor * 100.0));
                     ui.separator();
                     ui.label(format!("📂 {} / {}", self.current_index + 1, self.image_list.len()));
+                    ui.separator();
+                    ui.label(format!("📎 {}", img.format_name));
                 } else {
                     ui.label("画像を読み込んでください（ドラッグ＆ドロップ可能）");
                 }
@@ -517,7 +580,7 @@ impl eframe::App for ImageViewerApp {
                 .default_width(220.0)
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("📁 フォルダ内一覧").strong());
+                    ui.label(egui::RichText::new(format!("📁 フォルダ内一覧 ({}ファイル)", self.image_list.len())).strong());
                     ui.separator();
 
                     if self.image_list.is_empty() {
@@ -532,7 +595,11 @@ impl eframe::App for ImageViewerApp {
                                     .unwrap_or("File");
                                 let selected = idx == self.current_index;
 
-                                if ui.selectable_label(selected, format!("📄 {}", name)).clicked() {
+                                let response = ui.selectable_label(selected, format!("📄 {}", name));
+                                if selected {
+                                    ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                                }
+                                if response.clicked() {
                                     if idx != self.current_index {
                                         selected_to_open = Some((idx, path.clone()));
                                     }
@@ -562,12 +629,48 @@ impl eframe::App for ImageViewerApp {
 
             // 画像なし状態のウェルカム画面
             if self.current_loaded_image.is_none() {
+                let is_dragging = ctx.input(|i| !i.raw.hovered_files.is_empty());
+                let stroke_color = if is_dragging { ui.visuals().selection.bg_fill } else { Color32::from_gray(128) };
+                
                 ui.centered_and_justified(|ui| {
+                    let rect = ui.min_rect().shrink(40.0);
+                    let stroke = egui::Stroke::new(2.0_f32, stroke_color);
+                    
+                    let painter = ui.painter();
+                    let dash_length = 10.0;
+                    let gap_length = 8.0;
+                    
+                    // ダッシュは手動描画
+                    let draw_dashed_line = |start: egui::Pos2, end: egui::Pos2| {
+                        let dir = end - start;
+                        let len = dir.length();
+                        let dir_norm = dir / len;
+                        let mut current = 0.0;
+                        while current < len {
+                            let end_t = (current + dash_length).min(len);
+                            painter.line_segment([start + dir_norm * current, start + dir_norm * end_t], stroke);
+                            current = end_t + gap_length;
+                        }
+                    };
+                    
+                    let tl = rect.left_top();
+                    let tr = rect.right_top();
+                    let bl = rect.left_bottom();
+                    let br = rect.right_bottom();
+                    
+                    draw_dashed_line(tl, tr);
+                    draw_dashed_line(tr, br);
+                    draw_dashed_line(br, bl);
+                    draw_dashed_line(bl, tl);
+
                     ui.vertical_centered(|ui| {
-                        ui.heading("📷 Rust 画像ビューア");
+                        ui.add_space(rect.height() * 0.3);
+                        ui.label(egui::RichText::new("🖼️").size(80.0));
+                        ui.add_space(20.0);
+                        ui.heading("画像ファイルをここにドラッグ＆ドロップ");
                         ui.add_space(10.0);
-                        ui.label("画像ファイルをここにドラッグ＆ドロップするか");
-                        ui.add_space(5.0);
+                        ui.label("または");
+                        ui.add_space(10.0);
                         if ui.button("📂 画像ファイルを選択").clicked() {
                             if let Some(path) = FileDialog::new()
                                 .add_filter("Image Files", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
@@ -581,16 +684,19 @@ impl eframe::App for ImageViewerApp {
                 return;
             }
 
-            let loaded = self.current_loaded_image.as_ref().unwrap();
+            let (orig_w, orig_h) = {
+                let loaded = self.current_loaded_image.as_ref().unwrap();
+                (loaded.width, loaded.height)
+            };
 
             // 描画可能領域のサイズ
             let available_size = ui.available_size();
 
             let rot = (self.rotation_deg % 360 + 360) % 360;
             let (disp_w, disp_h) = if rot == 90 || rot == 270 {
-                (loaded.height, loaded.width)
+                (orig_h, orig_w)
             } else {
-                (loaded.width, loaded.height)
+                (orig_w, orig_h)
             };
 
             // ズーム倍率の計算
@@ -654,6 +760,51 @@ impl eframe::App for ImageViewerApp {
             // マウス操作用のレスポンス
             let response = ui.allocate_response(available_size, Sense::click_and_drag());
             let is_hovered = ui.rect_contains_pointer(ui.max_rect());
+
+            if response.double_clicked() {
+                if self.view_mode == ViewMode::FitWindow {
+                    self.view_mode = ViewMode::OriginalSize;
+                } else {
+                    self.view_mode = ViewMode::FitWindow;
+                }
+                self.pan_offset = Vec2::ZERO;
+            }
+
+            response.context_menu(|ui| {
+                let loaded = self.current_loaded_image.as_ref().unwrap();
+                if ui.button("📂 エクスプローラーで開く").clicked() {
+                    let path = &loaded.path;
+                    let _ = std::process::Command::new("explorer")
+                        .arg("/select,")
+                        .arg(path)
+                        .spawn();
+                    ui.close_menu();
+                }
+                if ui.button("📋 ファイルパスをコピー").clicked() {
+                    if let Some(path_str) = loaded.path.to_str() {
+                        ctx.copy_text(path_str.to_string());
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("ℹ️ 画像情報").clicked() {
+                    let path = &loaded.path;
+                    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown");
+                    let info = format!(
+                        "ファイル名: {}\nフォーマット: {}\n解像度: {} x {}\nファイルサイズ: {}",
+                        filename,
+                        loaded.format_name,
+                        loaded.width,
+                        loaded.height,
+                        format_bytes(loaded.file_size_bytes)
+                    );
+                    rfd::MessageDialog::new()
+                        .set_title("画像情報")
+                        .set_description(&info)
+                        .set_buttons(rfd::MessageButtons::Ok)
+                        .show();
+                    ui.close_menu();
+                }
+            });
 
             // スクロール入力の取得：MouseWheel イベント優先で画面間の描画ラグ・高速デコードによる連続暴発を完全防止
             let mut wheel_delta_y = 0.0f32;
