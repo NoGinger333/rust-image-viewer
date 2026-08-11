@@ -132,7 +132,7 @@ impl ImageViewerApp {
             self.current_index = idx;
         }
 
-        // キャッシュに既に存在する場合は即座に表示（0ミリ秒ラグ）
+        // キャッシュに既に存在する場合は即座に表示（Arc参照クローンによりO(1)爆速取得）
         if let Some(cached_image) = self.image_cache.get(&path).cloned() {
             self.current_loaded_image = Some(cached_image);
             self.reset_view();

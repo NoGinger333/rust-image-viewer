@@ -1,18 +1,20 @@
 use anyhow::{Context, Result};
 use egui::ColorImage;
 use image::{DynamicImage, GenericImageView};
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// サポート対象の画像拡張子
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif", "ico",
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico",
 ];
 
 /// 画像データの保持構造体
 #[derive(Clone)]
 pub struct LoadedImage {
     pub path: PathBuf,
-    pub original_image: DynamicImage,
+    pub original_image: Arc<DynamicImage>,
     pub width: u32,
     pub height: u32,
     pub file_size_bytes: u64,
@@ -39,7 +41,7 @@ impl LoadedImage {
 
         Ok(Self {
             path,
-            original_image: dynamic_img,
+            original_image: Arc::new(dynamic_img),
             width,
             height,
             file_size_bytes,
@@ -49,24 +51,24 @@ impl LoadedImage {
 
     /// 回転・反転・シャープネス処理を行った新しい `ColorImage` を生成
     pub fn transform_color_image(&self, rotation_deg: i32, flip_h: bool, flip_v: bool, sharpen: bool) -> (ColorImage, u32, u32) {
-        let mut img = self.original_image.clone();
+        let mut img: Cow<DynamicImage> = Cow::Borrowed(&self.original_image);
 
         match (rotation_deg % 360 + 360) % 360 {
-            90 => img = img.rotate90(),
-            180 => img = img.rotate180(),
-            270 => img = img.rotate270(),
+            90 => img = Cow::Owned(img.rotate90()),
+            180 => img = Cow::Owned(img.rotate180()),
+            270 => img = Cow::Owned(img.rotate270()),
             _ => {}
         }
 
         if flip_h {
-            img = img.fliph();
+            img = Cow::Owned(img.fliph());
         }
         if flip_v {
-            img = img.flipv();
+            img = Cow::Owned(img.flipv());
         }
 
         if sharpen {
-            let sharpened_buf = image::imageops::unsharpen(&img, 1.2, 1);
+            let sharpened_buf = image::imageops::unsharpen(img.as_ref(), 1.2, 1);
             let sharpened = DynamicImage::ImageRgba8(sharpened_buf);
             let (w, h) = sharpened.dimensions();
             let color_img = dynamic_image_to_color_image(&sharpened);
@@ -74,7 +76,7 @@ impl LoadedImage {
         }
 
         let (w, h) = img.dimensions();
-        let color_img = dynamic_image_to_color_image(&img);
+        let color_img = dynamic_image_to_color_image(img.as_ref());
         (color_img, w, h)
     }
 }
