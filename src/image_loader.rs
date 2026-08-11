@@ -88,7 +88,7 @@ impl LoadedImage {
 
         // 高解像度マンガ原稿の縮小表示時に発生するトーンのモアレ・干渉波ノイズをミップマップピラミッド + CatmullRom フィルタで完全に抑制
         if let Some((max_w, max_h)) = target_size {
-            if max_w > 0 && max_h > 0 && (orig_w > max_w || orig_h > max_h) {
+            if max_w > 0 && max_h > 0 {
                 // アスペクト比を維持したリサイズ後の寸法計算
                 let ratio_x = max_w as f64 / orig_w as f64;
                 let ratio_y = max_h as f64 / orig_h as f64;
@@ -97,54 +97,56 @@ impl LoadedImage {
                 let fit_w = ((orig_w as f64 * ratio).round() as u32).max(1);
                 let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
 
-                // target_w, target_h (fit_w, fit_h) 以上で最小のミップマップ level を mipmaps から選出
-                let mut chosen_mipmap: Option<&Arc<DynamicImage>> = None;
-                for m in &self.mipmaps {
-                    let (mw, mh) = if is_swapped {
-                        (m.height(), m.width())
-                    } else {
-                        (m.width(), m.height())
-                    };
-                    if mw >= fit_w && mh >= fit_h {
-                        chosen_mipmap = Some(m);
-                    } else {
-                        break;
+                if fit_w < orig_w || fit_h < orig_h {
+                    // target_w, target_h (fit_w, fit_h) 以上で最小のミップマップ level を mipmaps から選出
+                    let mut chosen_mipmap: Option<&Arc<DynamicImage>> = None;
+                    for m in &self.mipmaps {
+                        let (mw, mh) = if is_swapped {
+                            (m.height(), m.width())
+                        } else {
+                            (m.width(), m.height())
+                        };
+                        if mw >= fit_w && mh >= fit_h {
+                            chosen_mipmap = Some(m);
+                        } else {
+                            break;
+                        }
                     }
+
+                    // 選出したソース画像（ミップマップまたは原寸画像）
+                    let source_dynamic: Cow<DynamicImage> = match chosen_mipmap {
+                        Some(m) => Cow::Borrowed(m.as_ref()),
+                        None => Cow::Borrowed(&self.original_image),
+                    };
+
+                    let mut img = source_dynamic;
+                    match rot {
+                        90 => img = Cow::Owned(img.rotate90()),
+                        180 => img = Cow::Owned(img.rotate180()),
+                        270 => img = Cow::Owned(img.rotate270()),
+                        _ => {}
+                    }
+
+                    if flip_h {
+                        img = Cow::Owned(img.fliph());
+                    }
+                    if flip_v {
+                        img = Cow::Owned(img.flipv());
+                    }
+
+                    let blurred = image::imageops::blur(img.as_ref(), 0.45);
+                    let blurred_img = DynamicImage::ImageRgba8(blurred);
+
+                    let resized_buf = image::imageops::resize(
+                        &blurred_img,
+                        fit_w,
+                        fit_h,
+                        image::imageops::FilterType::CatmullRom,
+                    );
+                    let resized_img = DynamicImage::ImageRgba8(resized_buf);
+                    let color_img = dynamic_image_to_color_image(&resized_img);
+                    return (color_img, fit_w, fit_h);
                 }
-
-                // 選出したソース画像（ミップマップまたは原寸画像）
-                let source_dynamic: Cow<DynamicImage> = match chosen_mipmap {
-                    Some(m) => Cow::Borrowed(m.as_ref()),
-                    None => Cow::Borrowed(&self.original_image),
-                };
-
-                let mut img = source_dynamic;
-                match rot {
-                    90 => img = Cow::Owned(img.rotate90()),
-                    180 => img = Cow::Owned(img.rotate180()),
-                    270 => img = Cow::Owned(img.rotate270()),
-                    _ => {}
-                }
-
-                if flip_h {
-                    img = Cow::Owned(img.fliph());
-                }
-                if flip_v {
-                    img = Cow::Owned(img.flipv());
-                }
-
-                let blurred = image::imageops::blur(img.as_ref(), 0.45);
-                let blurred_img = DynamicImage::ImageRgba8(blurred);
-
-                let resized_buf = image::imageops::resize(
-                    &blurred_img,
-                    fit_w,
-                    fit_h,
-                    image::imageops::FilterType::CatmullRom,
-                );
-                let resized_img = DynamicImage::ImageRgba8(resized_buf);
-                let color_img = dynamic_image_to_color_image(&resized_img);
-                return (color_img, fit_w, fit_h);
             }
         }
 

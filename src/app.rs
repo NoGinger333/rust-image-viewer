@@ -22,6 +22,8 @@ pub struct ImageViewerApp {
     current_loaded_image: Option<LoadedImage>,
     /// 表示用eguiテクスチャ
     texture_handle: Option<TextureHandle>,
+    /// 描画済みのターゲットサイズ
+    rendered_target_size: Option<(u32, u32)>,
 
     /// デコード済み画像のキャッシュ (パス -> LoadedImage)
     image_cache: HashMap<PathBuf, LoadedImage>,
@@ -77,6 +79,7 @@ impl Default for ImageViewerApp {
         Self {
             current_loaded_image: None,
             texture_handle: None,
+            rendered_target_size: None,
             image_cache: HashMap::new(),
             preload_promises: Vec::new(),
             image_list: Vec::new(),
@@ -113,6 +116,7 @@ impl ImageViewerApp {
     fn open_image_file(&mut self, path: PathBuf) {
         self.error_message = None;
         self.texture_handle = None; // テクスチャ更新フラグのリセット
+        self.rendered_target_size = None;
 
         let parent_dir = path.parent().map(|p| p.to_path_buf());
 
@@ -133,6 +137,7 @@ impl ImageViewerApp {
         }
 
         self.texture_handle = None;
+        self.rendered_target_size = None;
 
         // キャッシュに既に存在する場合は即座に表示（Arc参照クローンによりO(1)爆速取得）
         if let Some(cached_image) = self.image_cache.get(&path).cloned() {
@@ -229,6 +234,7 @@ impl ImageViewerApp {
         self.flip_h = false;
         self.flip_v = false;
         self.view_mode = ViewMode::FitWindow;
+        self.rendered_target_size = None;
     }
 
     /// テクスチャの再生成 (モアレ防止の高品質アンチエイリアシング縮小適用)
@@ -243,10 +249,12 @@ impl ImageViewerApp {
                 egui::TextureOptions::LINEAR,
             );
             self.texture_handle = Some(handle);
+            self.rendered_target_size = target_size;
         }
     }
 
     fn update_texture(&mut self, ctx: &Context) {
+        self.rendered_target_size = None;
         self.update_texture_with_target_size(ctx, None);
     }
 
@@ -262,11 +270,6 @@ impl eframe::App for ImageViewerApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         // バックグラウンドで進行中の画像先読みプロミスを更新
         self.poll_preload_promises();
-
-        // 現在表示すべきテクスチャが更新されていない場合は再生成
-        if self.texture_handle.is_none() && self.current_loaded_image.is_some() {
-            self.update_texture(ctx);
-        }
 
         // ウィンドウタイトルを開いているファイル名に合わせて動的更新
         let window_title = if let Some(ref img) = self.current_loaded_image {
@@ -628,14 +631,15 @@ impl eframe::App for ImageViewerApp {
             let target_w = ((disp_w as f32 * actual_zoom * ppp).round() as u32).max(1);
             let target_h = ((disp_h as f32 * actual_zoom * ppp).round() as u32).max(1);
 
-            // テクスチャが未作成の場合は画面解像度に合わせたテクスチャを生成
-            if self.texture_handle.is_none() {
-                let target_size = if actual_zoom < 0.99 {
-                    Some((target_w, target_h))
-                } else {
-                    None
-                };
+            let target_size = if disp_w > target_w || disp_h > target_h {
+                Some((target_w, target_h))
+            } else {
+                None
+            };
+
+            if self.texture_handle.is_none() || self.rendered_target_size != target_size {
                 self.update_texture_with_target_size(ctx, target_size);
+                self.rendered_target_size = target_size;
             }
 
             if self.texture_handle.is_none() {
