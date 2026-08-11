@@ -228,27 +228,21 @@ impl ImageViewerApp {
         self.view_mode = ViewMode::FitWindow;
     }
 
-    /// テクスチャの再生成 (ノイズ・モアレのない高品質表示)
+    /// テクスチャの再生成 (完全にノイズのない高品質表示)
     fn update_texture(&mut self, ctx: &Context) {
         if let Some(ref loaded) = self.current_loaded_image {
             let (color_img, _w, _h) =
                 loaded.transform_color_image(self.rotation_deg, self.flip_h, self.flip_v, self.sharpen_enabled);
 
-            // ノイズ・チラつき・モアレパターンが発生しないクリーンなテクスチャオプション
-            let texture_options = if self.use_nearest_filter {
-                egui::TextureOptions::NEAREST
-            } else {
-                egui::TextureOptions::LINEAR
-            };
-
             let handle = ctx.load_texture(
                 "current_image",
                 color_img,
-                texture_options,
+                egui::TextureOptions::LINEAR,
             );
             self.texture_handle = Some(handle);
         }
     }
+
 
 
 

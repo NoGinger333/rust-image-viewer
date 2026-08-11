@@ -93,6 +93,7 @@ fn dynamic_image_to_color_image(img: &DynamicImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
 }
 
+
 /// 指定したファイルと同じディレクトリにある対応画像一覧を取得する (高速化版)
 pub fn scan_directory_for_images(current_path: &Path) -> (Vec<PathBuf>, usize) {
     let mut images = Vec::new();
