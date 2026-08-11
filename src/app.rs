@@ -24,6 +24,9 @@ pub struct ImageViewerApp {
     texture_handle: Option<TextureHandle>,
     /// 描画済みのターゲットサイズ
     rendered_target_size: Option<(u32, u32)>,
+    /// リサイズデバウンス判定用
+    last_target_size: Option<(u32, u32)>,
+    last_target_size_change_time: std::time::Instant,
 
     /// デコード済み画像のキャッシュ (パス -> LoadedImage)
     image_cache: HashMap<PathBuf, LoadedImage>,
@@ -80,6 +83,8 @@ impl Default for ImageViewerApp {
             current_loaded_image: None,
             texture_handle: None,
             rendered_target_size: None,
+            last_target_size: None,
+            last_target_size_change_time: std::time::Instant::now(),
             image_cache: HashMap::new(),
             preload_promises: Vec::new(),
             image_list: Vec::new(),
@@ -643,9 +648,40 @@ impl eframe::App for ImageViewerApp {
                 None
             };
 
-            if self.texture_handle.is_none() || self.rendered_target_size != target_size {
+            let mut should_update = self.texture_handle.is_none();
+
+            if !should_update {
+                match (self.rendered_target_size, target_size) {
+                    (None, Some(_)) | (Some(_), None) => {
+                        should_update = true;
+                    }
+                    (Some((rw, rh)), Some((tw, th))) => {
+                        let ratio_w = (tw as f32 - rw as f32).abs() / rw as f32;
+                        let ratio_h = (th as f32 - rh as f32).abs() / rh as f32;
+
+                        if ratio_w >= 0.12 || ratio_h >= 0.12 {
+                            should_update = true;
+                        } else if self.rendered_target_size != target_size {
+                            if self.last_target_size != target_size {
+                                self.last_target_size = target_size;
+                                self.last_target_size_change_time = std::time::Instant::now();
+                            }
+
+                            if self.last_target_size_change_time.elapsed().as_millis() > 150 {
+                                should_update = true;
+                            } else {
+                                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                            }
+                        }
+                    }
+                    (None, None) => {}
+                }
+            }
+
+            if should_update {
                 self.update_texture_with_target_size(ctx, target_size);
                 self.rendered_target_size = target_size;
+                self.last_target_size = target_size;
             }
 
             if self.texture_handle.is_none() {
