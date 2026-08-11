@@ -357,9 +357,10 @@ impl eframe::App for ImageViewerApp {
 
                 let mut zoom_percent = (self.zoom_factor * 100.0) as i32;
                 if ui
-                    .add(egui::DragValue::new(&mut zoom_percent).suffix("%").range(10..=3000))
+                    .add(egui::DragValue::new(&mut zoom_percent).speed(0.5).suffix("%").range(10..=3000))
                     .on_hover_text("拡大率の直接指定")
                     .changed()
+
                 {
                     self.zoom_factor = (zoom_percent as f32 / 100.0).max(0.1);
                     self.view_mode = ViewMode::FreeZoom;
@@ -652,9 +653,10 @@ impl eframe::App for ImageViewerApp {
 
                 let pointer_pos = ctx.pointer_latest_pos();
 
-                // ボタン周辺にカーソルが近づいたか判定 (25pxのマージン領域拡張)
-                let left_hovered = pointer_pos.map_or(false, |pos| left_btn_rect.expand(25.0).contains(pos));
-                let right_hovered = pointer_pos.map_or(false, |pos| right_btn_rect.expand(25.0).contains(pos));
+                // ボタン周辺にカーソルが近づいたか判定 (マージン過敏防止のため 6px の適正拡張に調整)
+                let left_hovered = pointer_pos.map_or(false, |pos| left_btn_rect.expand(6.0).contains(pos));
+                let right_hovered = pointer_pos.map_or(false, |pos| right_btn_rect.expand(6.0).contains(pos));
+
 
 
                 // 0.0 〜 1.0 へ「ふわぁ」と滑らかに遷移するアニメーション値を取得
