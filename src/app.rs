@@ -90,7 +90,7 @@ impl Default for ImageViewerApp {
             show_sidebar: load_sidebar_config(),
             error_message: None,
             sharpen_enabled: false,
-            use_nearest_filter: true,
+            use_nearest_filter: false,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
         }
