@@ -49,13 +49,12 @@ impl LoadedImage {
     }
 
 
-    /// 回転・反転・シャープネス・高品質ダウンサンプリング処理を行った新しい `ColorImage` を生成
+    /// 回転・反転・高品質ダウンサンプリング処理を行った新しい `ColorImage` を生成
     pub fn transform_color_image(
         &self,
         rotation_deg: i32,
         flip_h: bool,
         flip_v: bool,
-        sharpen: bool,
         target_size: Option<(u32, u32)>,
     ) -> (ColorImage, u32, u32) {
         let rot = (rotation_deg % 360 + 360) % 360;
@@ -122,23 +121,10 @@ impl LoadedImage {
                         curr_img = DynamicImage::ImageRgba8(final_buf);
                     }
 
-                    if sharpen {
-                        let sharpened_buf = image::imageops::unsharpen(&curr_img, 1.2, 1);
-                        curr_img = DynamicImage::ImageRgba8(sharpened_buf);
-                    }
-
                     let color_img = dynamic_image_to_color_image(&curr_img);
                     return (color_img, fit_w, fit_h);
                 }
             }
-        }
-
-        if sharpen {
-            let sharpened_buf = image::imageops::unsharpen(img.as_ref(), 1.2, 1);
-            let sharpened = DynamicImage::ImageRgba8(sharpened_buf);
-            let (w, h) = sharpened.dimensions();
-            let color_img = dynamic_image_to_color_image(&sharpened);
-            return (color_img, w, h);
         }
 
         let (w, h) = img.dimensions();

@@ -49,10 +49,6 @@ pub struct ImageViewerApp {
     show_sidebar: bool,
     error_message: Option<String>,
 
-    /// 表示補正設定
-    sharpen_enabled: bool,
-    use_nearest_filter: bool,
-
     /// ホイールによるページ移動用ロック＆タイマー
     scroll_locked: bool,
     last_scroll_navigate_time: std::time::Instant,
@@ -97,8 +93,6 @@ impl Default for ImageViewerApp {
             view_mode: ViewMode::FitWindow,
             show_sidebar: load_sidebar_config(),
             error_message: None,
-            sharpen_enabled: false,
-            use_nearest_filter: false,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
         }
@@ -250,7 +244,6 @@ impl ImageViewerApp {
                     self.rotation_deg,
                     self.flip_h,
                     self.flip_v,
-                    self.sharpen_enabled,
                     target_size,
                 );
 
@@ -424,28 +417,6 @@ impl eframe::App for ImageViewerApp {
                 }
 
                 ui.separator();
-
-                // 表示補正トグルボタン
-                if ui
-                    .selectable_label(self.sharpen_enabled, icon_style("✒"))
-                    .on_hover_text("文字くっきり (シャープネス補正) ON/OFF")
-                    .clicked()
-                {
-                    self.sharpen_enabled = !self.sharpen_enabled;
-                    self.update_texture(ctx);
-                }
-
-                if ui
-                    .selectable_label(self.use_nearest_filter, icon_style("🎯"))
-                    .on_hover_text("縮小文字のぼやけ防止 (シャープ補間 / スムース補間) 切替")
-                    .clicked()
-                {
-                    self.use_nearest_filter = !self.use_nearest_filter;
-                    self.update_texture(ctx);
-                }
-
-                ui.separator();
-
 
                 // 回転・反転
 
