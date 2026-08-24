@@ -329,20 +329,32 @@ impl eframe::App for ImageViewerApp {
         // ツールバー (TopPanel) - 超モダン＆洗練されたベクトルUIアイコン
         egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
             ui.style_mut().spacing.item_spacing = Vec2::new(12.0, 0.0);
-            ui.style_mut().spacing.button_padding = Vec2::new(6.0, 4.0);
+            ui.style_mut().spacing.button_padding = Vec2::new(6.0, 5.0);
 
             ui.horizontal_centered(|ui| {
                 // アイコンスタイルの共通定義（スタイリッシュな単色ミニマルアイコン）
                 let text_color = ui.visuals().text_color();
-                let icon_style = move |text: &str| {
+                let icon_text = move |text: &str| {
                     egui::RichText::new(text)
                         .size(16.5)
                         .color(text_color)
                 };
 
+                const BTN_SIZE: Vec2 = Vec2::new(28.0, 28.0);
+                let icon_btn = |text: &str| {
+                    egui::Button::new(icon_text(text))
+                        .min_size(BTN_SIZE)
+                        .frame(false)
+                };
+                let toggle_btn = |text: egui::RichText, is_selected: bool| {
+                    egui::Button::new(text)
+                        .min_size(BTN_SIZE)
+                        .selected(is_selected)
+                };
+
                 // ファイルを開く
                 if ui
-                    .add(egui::Button::new(icon_style("🗁")).frame(false))
+                    .add(icon_btn("🗁"))
                     .on_hover_text("ファイルを開く (Ctrl+O)")
                     .clicked()
                 {
@@ -356,7 +368,7 @@ impl eframe::App for ImageViewerApp {
 
                 // サイドバー切替
                 if ui
-                    .add(egui::Button::new(icon_style("☰")).frame(false))
+                    .add(icon_btn("☰"))
                     .on_hover_text("サイドバー (画像一覧) の表示切替")
                     .clicked()
                 {
@@ -368,7 +380,7 @@ impl eframe::App for ImageViewerApp {
 
                 // ズームコントロール (拡大・縮小)
                 if ui
-                    .add(egui::Button::new(icon_style("🔍+")).frame(false))
+                    .add(icon_btn("🔍+"))
                     .on_hover_text("拡大")
                     .clicked()
                 {
@@ -377,7 +389,7 @@ impl eframe::App for ImageViewerApp {
                 }
 
                 if ui
-                    .add(egui::Button::new(icon_style("🔍-")).frame(false))
+                    .add(icon_btn("🔍-"))
                     .on_hover_text("縮小")
                     .clicked()
                 {
@@ -396,7 +408,7 @@ impl eframe::App for ImageViewerApp {
                 }
 
                 if ui
-                    .selectable_label(self.view_mode == ViewMode::FitWindow, icon_style("⛶"))
+                    .add(toggle_btn(icon_text("⛶"), self.view_mode == ViewMode::FitWindow))
                     .on_hover_text("ウィンドウにフィット")
                     .clicked()
                 {
@@ -404,10 +416,10 @@ impl eframe::App for ImageViewerApp {
                     self.pan_offset = Vec2::ZERO;
                 }
                 if ui
-                    .selectable_label(
+                    .add(toggle_btn(
+                        egui::RichText::new("1:1").size(13.5).strong().color(text_color),
                         self.view_mode == ViewMode::OriginalSize,
-                        egui::RichText::new("1:1").size(14.0).strong().color(text_color),
-                    )
+                    ))
                     .on_hover_text("原寸大 (100%) 表示")
                     .clicked()
                 {
@@ -420,7 +432,7 @@ impl eframe::App for ImageViewerApp {
 
                 // 回転・反転
                 if ui
-                    .add(egui::Button::new(icon_style("⟳")).frame(false))
+                    .add(icon_btn("⟳"))
                     .on_hover_text("90°時計回りに回転")
                     .clicked()
                 {
@@ -428,7 +440,7 @@ impl eframe::App for ImageViewerApp {
                     self.update_texture(ctx);
                 }
                 if ui
-                    .add(egui::Button::new(icon_style("⇄")).frame(false))
+                    .add(icon_btn("⇄"))
                     .on_hover_text("左右反転")
                     .clicked()
                 {
@@ -436,7 +448,7 @@ impl eframe::App for ImageViewerApp {
                     self.update_texture(ctx);
                 }
                 if ui
-                    .add(egui::Button::new(icon_style("⇅")).frame(false))
+                    .add(icon_btn("⇅"))
                     .on_hover_text("上下反転")
                     .clicked()
                 {
@@ -448,7 +460,7 @@ impl eframe::App for ImageViewerApp {
 
                 // リセット
                 if ui
-                    .add(egui::Button::new(icon_style("↺")).frame(false))
+                    .add(icon_btn("↺"))
                     .on_hover_text("表示位置・ズームをリセット")
                     .clicked()
                 {
@@ -469,7 +481,7 @@ impl eframe::App for ImageViewerApp {
                     };
 
                     if ui
-                        .add(egui::Button::new(icon_style(theme_icon)).frame(false))
+                        .add(icon_btn(theme_icon))
                         .on_hover_text(theme_tooltip)
                         .clicked()
                     {
