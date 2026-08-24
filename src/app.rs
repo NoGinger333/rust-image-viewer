@@ -328,18 +328,17 @@ impl eframe::App for ImageViewerApp {
 
         // ツールバー (TopPanel) - 超モダン＆洗練されたベクトルUIアイコン
         egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
-            ui.style_mut().spacing.item_spacing = Vec2::new(14.0, 0.0);
-            ui.style_mut().spacing.button_padding = Vec2::new(8.0, 5.0);
+            ui.style_mut().spacing.item_spacing = Vec2::new(12.0, 0.0);
+            ui.style_mut().spacing.button_padding = Vec2::new(6.0, 4.0);
 
             ui.horizontal_centered(|ui| {
                 // アイコンスタイルの共通定義（スタイリッシュな単色ミニマルアイコン）
                 let text_color = ui.visuals().text_color();
                 let icon_style = move |text: &str| {
                     egui::RichText::new(text)
-                        .size(17.0)
+                        .size(16.5)
                         .color(text_color)
                 };
-
 
                 // ファイルを開く
                 if ui
@@ -391,7 +390,6 @@ impl eframe::App for ImageViewerApp {
                     .add(egui::DragValue::new(&mut zoom_percent).speed(1.0).suffix("%").range(10..=3000))
                     .on_hover_text("拡大率の直接指定")
                     .changed()
-
                 {
                     self.zoom_factor = (zoom_percent as f32 / 100.0).max(0.1);
                     self.view_mode = ViewMode::FreeZoom;
@@ -408,7 +406,7 @@ impl eframe::App for ImageViewerApp {
                 if ui
                     .selectable_label(
                         self.view_mode == ViewMode::OriginalSize,
-                        egui::RichText::new("1:1").size(14.0).strong(),
+                        egui::RichText::new("1:1").size(14.0).strong().color(text_color),
                     )
                     .on_hover_text("原寸大 (100%) 表示")
                     .clicked()
@@ -421,7 +419,6 @@ impl eframe::App for ImageViewerApp {
                 ui.separator();
 
                 // 回転・反転
-
                 if ui
                     .add(egui::Button::new(icon_style("⟳")).frame(false))
                     .on_hover_text("90°時計回りに回転")
@@ -844,7 +841,7 @@ impl eframe::App for ImageViewerApp {
     }
 }
 
-/// Windowsシステムフォント（メイリオ / 游ゴシック等）をロードして日本語文字化け（豆腐）を防止
+/// Windowsシステムフォント（メイリオ / 游ゴシック等）および記号・絵文字フォントをロードして文字化け（豆腐）を防止
 fn setup_japanese_font(ctx: &Context) {
     let mut fonts = egui::FontDefinitions::default();
 
@@ -878,8 +875,44 @@ fn setup_japanese_font(ctx: &Context) {
                 .or_default()
                 .insert(0, "jp_system_font".to_owned());
 
-            ctx.set_fonts(fonts);
             break;
         }
     }
+
+    // Windows標準のシンボル＆絵文字フォントをフォールバック登録（⛶, ⟳, ⇄, ⇅, ↺, ☰, 🗁, 📁 等の描画安定化）
+    if let Ok(symbol_data) = std::fs::read("C:\\Windows\\Fonts\\seguisym.ttf") {
+        fonts.font_data.insert(
+            "segoe_ui_symbol".to_owned(),
+            egui::FontData::from_owned(symbol_data),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("segoe_ui_symbol".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("segoe_ui_symbol".to_owned());
+    }
+
+    if let Ok(emoji_data) = std::fs::read("C:\\Windows\\Fonts\\seguiemj.ttf") {
+        fonts.font_data.insert(
+            "segoe_ui_emoji".to_owned(),
+            egui::FontData::from_owned(emoji_data),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("segoe_ui_emoji".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("segoe_ui_emoji".to_owned());
+    }
+
+    ctx.set_fonts(fonts);
 }
