@@ -570,31 +570,36 @@ impl eframe::App for ImageViewerApp {
                         ui.add_space(10.0);
                         ui.label("一致する画像がありません");
                     } else {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for (idx, path) in self.image_list.iter().enumerate() {
-                                let name = path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("File");
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for (idx, path) in self.image_list.iter().enumerate() {
+                                    let name = path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("File");
 
-                                if is_filtered && !name.to_lowercase().contains(&query) {
-                                    continue;
-                                }
+                                    if is_filtered && !name.to_lowercase().contains(&query) {
+                                        continue;
+                                    }
 
-                                let selected = idx == self.current_index;
-                                let response = ui.selectable_label(selected, format!("📄 {}", name));
+                                    let selected = idx == self.current_index;
+                                    let response = ui.add_sized(
+                                        [ui.available_width(), 20.0],
+                                        egui::SelectableLabel::new(selected, format!("📄 {}", name)),
+                                    );
 
-                                if selected {
-                                    ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
-                                }
+                                    if selected {
+                                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                                    }
 
-                                if response.clicked() {
-                                    if idx != self.current_index {
-                                        selected_to_open = Some((idx, path.clone()));
+                                    if response.clicked() {
+                                        if idx != self.current_index {
+                                            selected_to_open = Some((idx, path.clone()));
+                                        }
                                     }
                                 }
-                            }
-                        });
+                            });
                     }
                 });
 
