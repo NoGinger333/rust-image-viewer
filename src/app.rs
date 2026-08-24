@@ -540,7 +540,8 @@ impl eframe::App for ImageViewerApp {
             };
 
             egui::SidePanel::left("image_sidebar")
-                .default_width(220.0)
+                .default_width(175.0)
+                .width_range(120.0..=400.0)
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
                     let header_text = if !is_filtered {
