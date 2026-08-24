@@ -47,6 +47,7 @@ pub struct ImageViewerApp {
 
     /// UI状態
     show_sidebar: bool,
+    sidebar_search_query: String,
     error_message: Option<String>,
 
     /// ホイールによるページ移動用ロック＆タイマー
@@ -92,6 +93,7 @@ impl Default for ImageViewerApp {
             flip_v: false,
             view_mode: ViewMode::FitWindow,
             show_sidebar: load_sidebar_config(),
+            sidebar_search_query: String::new(),
             error_message: None,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
@@ -513,16 +515,60 @@ impl eframe::App for ImageViewerApp {
         if self.show_sidebar {
             let mut selected_to_open = None;
 
+            let is_filtered = !self.sidebar_search_query.is_empty();
+            let query = self.sidebar_search_query.to_lowercase();
+            let filtered_count = if is_filtered {
+                self.image_list
+                    .iter()
+                    .filter(|p| {
+                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        name.to_lowercase().contains(&query)
+                    })
+                    .count()
+            } else {
+                self.image_list.len()
+            };
+
             egui::SidePanel::left("image_sidebar")
                 .default_width(220.0)
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("📁 フォルダ内一覧").strong());
+                    let header_text = if !is_filtered {
+                        format!("📁 フォルダ内一覧 ({} 件)", self.image_list.len())
+                    } else {
+                        format!("📁 フォルダ内一覧 ({} / {} 件)", filtered_count, self.image_list.len())
+                    };
+                    ui.label(egui::RichText::new(header_text).strong());
+
+                    if self.image_list.len() > 1 {
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            let width = if is_filtered {
+                                ui.available_width() - 28.0
+                            } else {
+                                ui.available_width()
+                            };
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.sidebar_search_query)
+                                    .hint_text("🔍 ファイル名で検索...")
+                                    .desired_width(width),
+                            );
+                            if is_filtered {
+                                if ui.button("✖").on_hover_text("検索をクリア").clicked() {
+                                    self.sidebar_search_query.clear();
+                                }
+                            }
+                        });
+                    }
+
                     ui.separator();
 
                     if self.image_list.is_empty() {
                         ui.add_space(10.0);
                         ui.label("（画像が選択されていません）");
+                    } else if is_filtered && filtered_count == 0 {
+                        ui.add_space(10.0);
+                        ui.label("一致する画像がありません");
                     } else {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for (idx, path) in self.image_list.iter().enumerate() {
@@ -530,9 +576,19 @@ impl eframe::App for ImageViewerApp {
                                     .file_name()
                                     .and_then(|n| n.to_str())
                                     .unwrap_or("File");
-                                let selected = idx == self.current_index;
 
-                                if ui.selectable_label(selected, format!("📄 {}", name)).clicked() {
+                                if is_filtered && !name.to_lowercase().contains(&query) {
+                                    continue;
+                                }
+
+                                let selected = idx == self.current_index;
+                                let response = ui.selectable_label(selected, format!("📄 {}", name));
+
+                                if selected {
+                                    ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                                }
+
+                                if response.clicked() {
                                     if idx != self.current_index {
                                         selected_to_open = Some((idx, path.clone()));
                                     }
