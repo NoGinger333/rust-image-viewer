@@ -327,7 +327,13 @@ impl eframe::App for ImageViewerApp {
         });
 
         // ツールバー (TopPanel) - 超モダン＆洗練されたベクトルUIアイコン
-        egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
+        let toolbar_frame = egui::Frame::side_top_panel(&ctx.style())
+            .inner_margin(egui::Margin::symmetric(10.0, 5.0));
+
+        egui::TopBottomPanel::top("top_toolbar")
+            .frame(toolbar_frame)
+            .exact_height(38.0)
+            .show(ctx, |ui| {
             ui.style_mut().spacing.item_spacing = Vec2::new(12.0, 0.0);
             ui.style_mut().spacing.button_padding = Vec2::new(6.0, 5.0);
 
@@ -594,7 +600,7 @@ impl eframe::App for ImageViewerApp {
 
                                     let selected = idx == self.current_index;
                                     let response = ui.add_sized(
-                                        [ui.available_width(), 20.0],
+                                        [ui.available_width(), 24.0],
                                         egui::SelectableLabel::new(selected, format!("📄 {}", name)),
                                     );
 
