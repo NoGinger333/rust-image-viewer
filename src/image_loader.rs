@@ -48,7 +48,6 @@ impl LoadedImage {
         })
     }
 
-
     /// 回転・反転・高品質ダウンサンプリング処理を行った新しい `ColorImage` を生成
     pub fn transform_color_image(
         &self,
@@ -57,7 +56,7 @@ impl LoadedImage {
         flip_v: bool,
         target_size: Option<(u32, u32)>,
     ) -> (ColorImage, u32, u32) {
-        let rot = (rotation_deg % 360 + 360) % 360;
+        let rot = rotation_deg.rem_euclid(360);
         let is_swapped = rot == 90 || rot == 270;
 
         let (orig_w, orig_h) = if is_swapped {
@@ -113,55 +112,14 @@ impl LoadedImage {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_render_manga_downscale() {
-        let test_img_path = PathBuf::from(r"C:\Users\kippe\.gemini\antigravity\brain\fe3af6f7-7851-4565-9e7e-aacd62dd1313\.user_uploaded\media_1786450134597.jpg");
-        if test_img_path.exists() {
-            let loaded = LoadedImage::load_from_path(&test_img_path).unwrap();
-            
-            // ガウシアンブラー (適応的ローパスフィルタ σ=0.45) を前処理してモアレのみを完璧にシャットアウト
-            let blurred = image::imageops::blur(loaded.original_image.as_ref(), 0.45);
-            let resized = image::imageops::resize(&blurred, 750, 1050, image::imageops::FilterType::CatmullRom);
-
-            let color_img = dynamic_image_to_color_image(&DynamicImage::ImageRgba8(resized));
-            
-            let w = 750;
-            let h = 1050;
-            let mut img_buf = image::RgbaImage::new(w, h);
-            for y in 0..h {
-                for x in 0..w {
-                    let pixel = color_img.pixels[(y * w + x) as usize];
-                    img_buf.put_pixel(x, y, image::Rgba([pixel.r(), pixel.g(), pixel.b(), pixel.a()]));
-                }
-            }
-            let out_path = r"C:\Users\kippe\.gemini\antigravity\brain\fe3af6f7-7851-4565-9e7e-aacd62dd1313\scratch\actual_rendered_output.png";
-            img_buf.save(out_path).unwrap();
-            println!("Rendered output saved to {}", out_path);
-        }
-    }
-
-}
-
-
-
-
-
-
-
-/// DynamicImage から egui::ColorImage への高精度変換
+/// DynamicImage から egui::ColorImage への高精度変換 (ゼロコピームーブ最適化)
 fn dynamic_image_to_color_image(img: &DynamicImage) -> ColorImage {
     let rgba = img.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
-    let pixels = rgba.as_flat_samples();
-    ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
+    ColorImage::from_rgba_unmultiplied(size, &rgba.into_raw())
 }
 
-
-/// 指定したファイルと同じディレクトリにある対応画像一覧を取得する (高速化版)
+/// 指定したファイルと同じディレクトリにある対応画像一覧を取得する (キャッシュ付きソート最適化版)
 pub fn scan_directory_for_images(current_path: &Path) -> (Vec<PathBuf>, usize) {
     let mut images = Vec::new();
     let mut current_idx = 0;
@@ -183,8 +141,8 @@ pub fn scan_directory_for_images(current_path: &Path) -> (Vec<PathBuf>, usize) {
             })
             .collect();
 
-        // 自然順（アルファベット順）にソート
-        entry_paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        // 自然順（アルファベット順）にキャッシュキーで高速ソート
+        entry_paths.sort_by_cached_key(|p| p.file_name().map(|n| n.to_os_string()));
 
         for (idx, path) in entry_paths.into_iter().enumerate() {
             if path == current_path || path.file_name() == current_path.file_name() {
@@ -196,7 +154,6 @@ pub fn scan_directory_for_images(current_path: &Path) -> (Vec<PathBuf>, usize) {
 
     (images, current_idx)
 }
-
 
 /// ファイルサイズを読みやすい文字列にフォーマット
 pub fn format_bytes(bytes: u64) -> String {
@@ -212,5 +169,32 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(500), "500 B");
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1024 * 1024 * 5), "5.00 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024 * 2), "2.00 GB");
+    }
+
+    #[test]
+    fn test_dynamic_image_to_color_image() {
+        let mut img_buf = RgbaImage::new(10, 10);
+        img_buf.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        let dyn_img = DynamicImage::ImageRgba8(img_buf);
+
+        let color_img = dynamic_image_to_color_image(&dyn_img);
+        assert_eq!(color_img.size, [10, 10]);
+        assert_eq!(color_img.pixels[0].r(), 255);
+        assert_eq!(color_img.pixels[0].g(), 0);
+        assert_eq!(color_img.pixels[0].b(), 0);
     }
 }

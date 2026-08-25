@@ -1,3 +1,5 @@
+use crate::config::{load_config, save_config, AppConfig};
+use crate::font::setup_custom_fonts;
 use crate::image_loader::{format_bytes, scan_directory_for_images, LoadedImage};
 use eframe::egui;
 use egui::{Color32, Context, Sense, TextureHandle, Vec2};
@@ -45,8 +47,8 @@ pub struct ImageViewerApp {
     flip_v: bool,
     view_mode: ViewMode,
 
-    /// UI状態
-    show_sidebar: bool,
+    /// UI状態・設定
+    config: AppConfig,
     sidebar_search_query: String,
     error_message: Option<String>,
 
@@ -55,57 +57,9 @@ pub struct ImageViewerApp {
     last_scroll_navigate_time: std::time::Instant,
 }
 
-fn get_config_path() -> PathBuf {
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let dir = PathBuf::from(appdata).join("rust-image-viewer");
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("config.txt")
-    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        let dir = PathBuf::from(userprofile).join(".rust-image-viewer");
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("config.txt")
-    } else {
-        PathBuf::from("rust_image_viewer_config.txt")
-    }
-}
-
-fn load_sidebar_config() -> bool {
-    let config_path = get_config_path();
-    let legacy_config = std::path::Path::new("rust_image_viewer_config.txt");
-
-    // 移行処理: 古い設定ファイルがあれば読み取り、削除する
-    let content = if config_path.exists() {
-        std::fs::read_to_string(&config_path).ok()
-    } else if legacy_config.exists() {
-        let legacy_content = std::fs::read_to_string(legacy_config).ok();
-        let _ = std::fs::remove_file(legacy_config);
-        legacy_content
-    } else {
-        None
-    };
-
-    if legacy_config.exists() {
-        let _ = std::fs::remove_file(legacy_config);
-    }
-
-    if let Some(content) = content {
-        for line in content.lines() {
-            if let Some(val) = line.strip_prefix("show_sidebar=") {
-                return val.trim().parse().unwrap_or(true);
-            }
-        }
-    }
-    true
-}
-
-fn save_sidebar_config(show_sidebar: bool) {
-    let config_path = get_config_path();
-    let content = format!("show_sidebar={}\n", show_sidebar);
-    let _ = std::fs::write(config_path, content);
-}
-
 impl Default for ImageViewerApp {
     fn default() -> Self {
+        let config = load_config();
         Self {
             current_loaded_image: None,
             texture_handle: None,
@@ -122,7 +76,7 @@ impl Default for ImageViewerApp {
             flip_h: false,
             flip_v: false,
             view_mode: ViewMode::FitWindow,
-            show_sidebar: load_sidebar_config(),
+            config,
             sidebar_search_query: String::new(),
             error_message: None,
             scroll_locked: false,
@@ -131,11 +85,9 @@ impl Default for ImageViewerApp {
     }
 }
 
-
-
 impl ImageViewerApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial_path: Option<PathBuf>) -> Self {
-        setup_japanese_font(&cc.egui_ctx);
+        setup_custom_fonts(&cc.egui_ctx);
         let mut app = Self::default();
         if let Some(path) = initial_path {
             app.open_image_file(path);
@@ -151,7 +103,7 @@ impl ImageViewerApp {
 
         let parent_dir = path.parent().map(|p| p.to_path_buf());
 
-        // フォルダが変わっていない場合は再走査（重いディスクアクセス）をスキップ！
+        // フォルダが変わっていない場合は再走査（重いディスクアクセス）をスキップ
         let is_same_dir = match (&self.image_list.first(), &parent_dir) {
             (Some(first_path), Some(curr_parent)) => first_path.parent() == Some(curr_parent.as_path()),
             _ => false,
@@ -186,7 +138,6 @@ impl ImageViewerApp {
                 self.reset_view();
                 self.trigger_preloading();
             }
-
             Err(err) => {
                 self.error_message = Some(format!("画像の読み込みに失敗しました: {}", err));
             }
@@ -293,13 +244,6 @@ impl ImageViewerApp {
         self.rendered_target_size = None;
         self.update_texture_with_target_size(ctx, None);
     }
-
-
-
-
-
-
-
 }
 
 impl eframe::App for ImageViewerApp {
@@ -413,8 +357,8 @@ impl eframe::App for ImageViewerApp {
                     .on_hover_text("サイドバー (画像一覧) の表示切替")
                     .clicked()
                 {
-                    self.show_sidebar = !self.show_sidebar;
-                    save_sidebar_config(self.show_sidebar);
+                    self.config.show_sidebar = !self.config.show_sidebar;
+                    save_config(&self.config);
                 }
 
                 ui.separator();
@@ -562,7 +506,7 @@ impl eframe::App for ImageViewerApp {
         });
 
         // サイドバー (SidePanel) - フォルダに関係なくユーザーのON/OFF設定を常に固定で維持
-        if self.show_sidebar {
+        if self.config.show_sidebar {
             let mut selected_to_open = None;
 
             let is_filtered = !self.sidebar_search_query.is_empty();
@@ -604,10 +548,10 @@ impl eframe::App for ImageViewerApp {
                                     .hint_text("🔍 ファイル名で検索...")
                                     .desired_width(width),
                             );
-                            if is_filtered {
-                                if ui.button("✖").on_hover_text("検索をクリア").clicked() {
-                                    self.sidebar_search_query.clear();
-                                }
+                            if is_filtered
+                                && ui.button("✖").on_hover_text("検索をクリア").clicked()
+                            {
+                                self.sidebar_search_query.clear();
                             }
                         });
                     }
@@ -644,10 +588,8 @@ impl eframe::App for ImageViewerApp {
                                         ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                                     }
 
-                                    if response.clicked() {
-                                        if idx != self.current_index {
-                                            selected_to_open = Some((idx, path.clone()));
-                                        }
+                                    if response.clicked() && idx != self.current_index {
+                                        selected_to_open = Some((idx, path.clone()));
                                     }
                                 }
                             });
@@ -660,10 +602,8 @@ impl eframe::App for ImageViewerApp {
             }
         }
 
-
         // メイン領域 (CentralPanel)
         egui::CentralPanel::default().show(ctx, |ui| {
-
             // エラー表示
             if let Some(ref err) = self.error_message {
                 ui.centered_and_justified(|ui| {
@@ -673,7 +613,7 @@ impl eframe::App for ImageViewerApp {
             }
 
             // 画像なし状態のウェルカム画面
-            if self.current_loaded_image.is_none() {
+            let Some(ref loaded) = self.current_loaded_image else {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
                         ui.heading("📷 Rust 画像ビューア");
@@ -691,9 +631,7 @@ impl eframe::App for ImageViewerApp {
                     });
                 });
                 return;
-            }
-
-            let loaded = self.current_loaded_image.as_ref().unwrap();
+            };
 
             // 描画可能領域のサイズ
             let available_size = ui.available_size();
@@ -752,11 +690,9 @@ impl eframe::App for ImageViewerApp {
                 self.last_target_size = target_size;
             }
 
-            if self.texture_handle.is_none() {
+            let Some(ref texture) = self.texture_handle else {
                 return;
-            }
-
-            let texture = self.texture_handle.as_ref().unwrap();
+            };
 
             // 表示する最終描画サイズ
             let display_size = Vec2::new(disp_w as f32 * actual_zoom, disp_h as f32 * actual_zoom);
@@ -810,9 +746,6 @@ impl eframe::App for ImageViewerApp {
                 }
             }
 
-
-
-
             // マウスドラッグによる移動（パン）
             if response.dragged() {
                 self.pan_offset += response.drag_delta();
@@ -845,10 +778,8 @@ impl eframe::App for ImageViewerApp {
                 let pointer_pos = ctx.pointer_latest_pos();
 
                 // ボタン周辺にカーソルが近づいたか判定 (マージン過敏防止のため 6px の適正拡張に調整)
-                let left_hovered = pointer_pos.map_or(false, |pos| left_btn_rect.expand(6.0).contains(pos));
-                let right_hovered = pointer_pos.map_or(false, |pos| right_btn_rect.expand(6.0).contains(pos));
-
-
+                let left_hovered = pointer_pos.is_some_and(|pos| left_btn_rect.expand(6.0).contains(pos));
+                let right_hovered = pointer_pos.is_some_and(|pos| right_btn_rect.expand(6.0).contains(pos));
 
                 // 0.0 〜 1.0 へ「ふわぁ」と滑らかに遷移するアニメーション値を取得
                 let left_alpha = ctx.animate_bool_responsive(ui.make_persistent_id("anim_nav_left"), left_hovered);
@@ -885,88 +816,10 @@ impl eframe::App for ImageViewerApp {
                 }
             }
 
-
-
             // 画面描画後に安全にページ遷移を実行（借用競合の完全防止）
             if let Some(delta) = pending_navigation {
                 self.navigate_image(delta);
             }
         });
     }
-}
-
-/// Windowsシステムフォント（メイリオ / 游ゴシック等）および記号・絵文字フォントをロードして文字化け（豆腐）を防止
-fn setup_japanese_font(ctx: &Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    let font_paths = [
-        "C:\\Windows\\Fonts\\meiryo.ttc",
-        "C:\\Windows\\Fonts\\meiryob.ttc",
-        "C:\\Windows\\Fonts\\msgothic.ttc",
-        "C:\\Windows\\Fonts\\yu Gothic.ttf",
-        "C:\\Windows\\Fonts\\yugothm.ttc",
-        "C:\\Windows\\Fonts\\yugothb.ttc",
-        "C:\\Windows\\Fonts\\msyh.ttc",
-        "C:\\Windows\\Fonts\\msjh.ttc",
-    ];
-
-    for path in font_paths {
-        if let Ok(font_data) = std::fs::read(path) {
-            fonts.font_data.insert(
-                "jp_system_font".to_owned(),
-                egui::FontData::from_owned(font_data),
-            );
-
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, "jp_system_font".to_owned());
-
-            fonts
-                .families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .insert(0, "jp_system_font".to_owned());
-
-            break;
-        }
-    }
-
-    // Windows標準のシンボル＆絵文字フォントをフォールバック登録（⛶, ⟳, ⇄, ⇅, ↺, ☰, 🗁, 📁 等の描画安定化）
-    if let Ok(symbol_data) = std::fs::read("C:\\Windows\\Fonts\\seguisym.ttf") {
-        fonts.font_data.insert(
-            "segoe_ui_symbol".to_owned(),
-            egui::FontData::from_owned(symbol_data),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push("segoe_ui_symbol".to_owned());
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .push("segoe_ui_symbol".to_owned());
-    }
-
-    if let Ok(emoji_data) = std::fs::read("C:\\Windows\\Fonts\\seguiemj.ttf") {
-        fonts.font_data.insert(
-            "segoe_ui_emoji".to_owned(),
-            egui::FontData::from_owned(emoji_data),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push("segoe_ui_emoji".to_owned());
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .push("segoe_ui_emoji".to_owned());
-    }
-
-    ctx.set_fonts(fonts);
 }

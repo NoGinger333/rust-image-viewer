@@ -1,8 +1,9 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod config;
+mod font;
 mod image_loader;
-
 
 use anyhow::Result;
 use app::ImageViewerApp;
