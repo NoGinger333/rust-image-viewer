@@ -55,11 +55,40 @@ pub struct ImageViewerApp {
     last_scroll_navigate_time: std::time::Instant,
 }
 
-/// アプリ設定の読み書き用
-const CONFIG_FILE_NAME: &str = "rust_image_viewer_config.txt";
+fn get_config_path() -> PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let dir = PathBuf::from(appdata).join("rust-image-viewer");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("config.txt")
+    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        let dir = PathBuf::from(userprofile).join(".rust-image-viewer");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("config.txt")
+    } else {
+        PathBuf::from("rust_image_viewer_config.txt")
+    }
+}
 
 fn load_sidebar_config() -> bool {
-    if let Ok(content) = std::fs::read_to_string(CONFIG_FILE_NAME) {
+    let config_path = get_config_path();
+    let legacy_config = std::path::Path::new("rust_image_viewer_config.txt");
+
+    // 移行処理: 古い設定ファイルがあれば読み取り、削除する
+    let content = if config_path.exists() {
+        std::fs::read_to_string(&config_path).ok()
+    } else if legacy_config.exists() {
+        let legacy_content = std::fs::read_to_string(legacy_config).ok();
+        let _ = std::fs::remove_file(legacy_config);
+        legacy_content
+    } else {
+        None
+    };
+
+    if legacy_config.exists() {
+        let _ = std::fs::remove_file(legacy_config);
+    }
+
+    if let Some(content) = content {
         for line in content.lines() {
             if let Some(val) = line.strip_prefix("show_sidebar=") {
                 return val.trim().parse().unwrap_or(true);
@@ -70,8 +99,9 @@ fn load_sidebar_config() -> bool {
 }
 
 fn save_sidebar_config(show_sidebar: bool) {
+    let config_path = get_config_path();
     let content = format!("show_sidebar={}\n", show_sidebar);
-    let _ = std::fs::write(CONFIG_FILE_NAME, content);
+    let _ = std::fs::write(config_path, content);
 }
 
 impl Default for ImageViewerApp {
