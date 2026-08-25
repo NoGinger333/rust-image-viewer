@@ -332,12 +332,20 @@ impl eframe::App for ImageViewerApp {
             ui.style_mut().spacing.item_spacing = Vec2::new(12.0, 0.0);
             ui.style_mut().spacing.button_padding = Vec2::new(6.0, 5.0);
 
+            // セパレーターの主張を抑制（半透明グレー）
+            let sep_color = if ctx.style().visuals.dark_mode {
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 30)
+            };
+            ui.visuals_mut().widgets.noninteractive.bg_stroke.color = sep_color;
+
             ui.horizontal_centered(|ui| {
                 // アイコンスタイルの共通定義（スタイリッシュな単色ミニマルアイコン）
                 let text_color = ui.visuals().text_color();
                 let icon_text = move |text: &str| {
                     egui::RichText::new(text)
-                        .size(16.5)
+                        .size(16.0)
                         .color(text_color)
                 };
 
@@ -350,6 +358,8 @@ impl eframe::App for ImageViewerApp {
                 let toggle_btn = |text: egui::RichText, is_selected: bool| {
                     egui::Button::new(text)
                         .min_size(BTN_SIZE)
+                        .frame(is_selected)
+                        .rounding(egui::Rounding::same(4.0))
                         .selected(is_selected)
                 };
 
@@ -418,7 +428,7 @@ impl eframe::App for ImageViewerApp {
                 }
                 if ui
                     .add(toggle_btn(
-                        egui::RichText::new("1:1").size(13.5).strong().color(text_color),
+                        egui::RichText::new("1:1").size(13.0).strong().color(text_color),
                         self.view_mode == ViewMode::OriginalSize,
                     ))
                     .on_hover_text("原寸大 (100%) 表示")
