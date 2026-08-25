@@ -7,7 +7,11 @@ mod image_loader;
 
 use anyhow::Result;
 use app::ImageViewerApp;
+use mimalloc::MiMalloc;
 use std::path::PathBuf;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 /// アプリアイコンを読み込み、外枠の背景を綺麗に自動透過（アルファチャンネル処理）して IconData を作成
 fn load_app_icon() -> Option<egui::IconData> {

@@ -81,7 +81,7 @@ impl LoadedImage {
             img = Cow::Owned(img.flipv());
         }
 
-        // 高精度リサンプリング (単一 Lanczos3 フィルター)
+        // 高速 SIMD Lanczos3 リサンプリング (fast_image_resize)
         if let Some((max_w, max_h)) = target_size {
             if max_w > 0 && max_h > 0 {
                 // アスペクト比を維持したリサイズ後の寸法計算
@@ -93,15 +93,38 @@ impl LoadedImage {
                 let fit_h = ((orig_h as f64 * ratio).round() as u32).max(1);
 
                 if fit_w < orig_w || fit_h < orig_h {
-                    let resized_buf = image::imageops::resize(
-                        img.as_ref(),
-                        fit_w,
-                        fit_h,
-                        image::imageops::FilterType::Lanczos3,
+                    let rgba = img.to_rgba8();
+                    let (src_w, src_h) = (rgba.width(), rgba.height());
+                    let src_image = fast_image_resize::images::Image::from_vec_u8(
+                        src_w,
+                        src_h,
+                        rgba.into_raw(),
+                        fast_image_resize::PixelType::U8x4,
                     );
-                    let resized_img = DynamicImage::ImageRgba8(resized_buf);
-                    let color_img = dynamic_image_to_color_image(&resized_img);
-                    return (color_img, fit_w, fit_h);
+
+                    if let Ok(src_img) = src_image {
+                        let mut dst_image = fast_image_resize::images::Image::new(
+                            fit_w,
+                            fit_h,
+                            fast_image_resize::PixelType::U8x4,
+                        );
+
+                        let mut resizer = fast_image_resize::Resizer::new();
+                        let options = fast_image_resize::ResizeOptions::new().resize_alg(
+                            fast_image_resize::ResizeAlg::Convolution(
+                                fast_image_resize::FilterType::Lanczos3,
+                            ),
+                        );
+
+                        if resizer.resize(&src_img, &mut dst_image, &options).is_ok() {
+                            let dst_vec = dst_image.into_vec();
+                            let color_img = ColorImage::from_rgba_unmultiplied(
+                                [fit_w as usize, fit_h as usize],
+                                &dst_vec,
+                            );
+                            return (color_img, fit_w, fit_h);
+                        }
+                    }
                 }
             }
         }
@@ -196,5 +219,26 @@ mod tests {
         assert_eq!(color_img.pixels[0].r(), 255);
         assert_eq!(color_img.pixels[0].g(), 0);
         assert_eq!(color_img.pixels[0].b(), 0);
+    }
+
+    #[test]
+    fn test_transform_color_image_resize() {
+        let mut img_buf = RgbaImage::new(100, 100);
+        for pixel in img_buf.pixels_mut() {
+            *pixel = Rgba([100, 150, 200, 255]);
+        }
+        let loaded = LoadedImage {
+            path: PathBuf::from("test.png"),
+            original_image: Arc::new(DynamicImage::ImageRgba8(img_buf)),
+            width: 100,
+            height: 100,
+            file_size_bytes: 1024,
+        };
+
+        let (color_img, fit_w, fit_h) = loaded.transform_color_image(0, false, false, Some((50, 50)));
+        assert_eq!(fit_w, 50);
+        assert_eq!(fit_h, 50);
+        assert_eq!(color_img.size, [50, 50]);
+        assert_eq!(color_img.pixels.len(), 50 * 50);
     }
 }

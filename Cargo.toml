@@ -8,6 +8,8 @@ eframe = "0.28.1"
 egui = "0.28.1"
 egui_extras = { version = "0.28.1", features = ["image"] }
 image = { version = "0.25.1", features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "ico"] }
+fast_image_resize = "5"
+mimalloc = { version = "0.1", default-features = false }
 rfd = "0.14.1"
 poll-promise = "0.3.0"
 anyhow = "1.0"
