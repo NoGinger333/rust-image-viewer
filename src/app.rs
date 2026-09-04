@@ -34,6 +34,9 @@ struct TextureKey {
     target: Option<(u32, u32)>,
 }
 
+/// 先回り生成したテクスチャのエントリ (ターゲットサイズ, 変換結果のPromise)
+type PrefetchedTexture = (Option<(u32, u32)>, Promise<ColorImage>);
+
 pub struct ImageViewerApp {
     /// 現在読み込んでいる画像データ
     current_loaded_image: Option<LoadedImage>,
@@ -45,6 +48,10 @@ pub struct ImageViewerApp {
     texture_pixel_size: Option<(u32, u32)>,
     /// バックグラウンドで生成中のテクスチャ (完了次第差し替え)
     pending_texture: Option<(TextureKey, Promise<ColorImage>)>,
+    /// アイドル時に先回り生成しておいた前後画像のテクスチャ (パス -> (ターゲットサイズ, 変換結果))
+    prefetched_textures: HashMap<PathBuf, PrefetchedTexture>,
+    /// テクスチャのプリフェッチを行ったビューポート状態 (幅, 高さ, DPI)。変化時はプリフェッチを破棄
+    prefetch_viewport: Option<(f32, f32, f32)>,
     /// 画像が切り替わった回数 (テクスチャキーの画像識別子)
     image_generation: u64,
     /// リサイズデバウンス判定用 (ターゲットサイズの変化のみ対象)
@@ -100,6 +107,8 @@ impl Default for ImageViewerApp {
             rendered_texture_key: None,
             texture_pixel_size: None,
             pending_texture: None,
+            prefetched_textures: HashMap::new(),
+            prefetch_viewport: None,
             image_generation: 0,
             last_target_key: None,
             last_target_change_time: std::time::Instant::now(),
@@ -380,6 +389,80 @@ impl ImageViewerApp {
         self.flip_h = false;
         self.flip_v = false;
         self.view_mode = ViewMode::FitWindow;
+    }
+
+    /// 完成した ColorImage をテクスチャへ反映 (既存ハンドルがあればそのまま差し替え)
+    fn install_texture(&mut self, ctx: &Context, color_img: ColorImage, key: TextureKey) {
+        let [tw, th] = color_img.size;
+        if let Some(handle) = self.texture_handle.as_mut() {
+            handle.set(color_img, egui::TextureOptions::LINEAR);
+        } else {
+            self.texture_handle = Some(ctx.load_texture(
+                "current_image",
+                color_img,
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+        self.texture_pixel_size = Some((tw as u32, th as u32));
+        self.rendered_texture_key = Some(key);
+    }
+
+    /// 前後画像のテクスチャ (リサイズ済みColorImage) をアイドル時に先回り生成しておく。
+    /// 切替直後は必ず reset_view() で FitWindow・回転0 になるため、その前提でターゲットを算出。
+    /// 切替時はターゲットが一致していれば生成済みテクスチャをそのまま流用でき、ほぼゼロ遅延で切替わる。
+    fn trigger_texture_prefetch(&mut self, available_size: Vec2, ppp: f32) {
+        // ウィンドウサイズ・DPIが変わったら過去のプリフェッチはターゲット不一致になるため破棄
+        let viewport = (available_size.x, available_size.y, ppp);
+        if self.prefetch_viewport != Some(viewport) {
+            self.prefetch_viewport = Some(viewport);
+            self.prefetched_textures.clear();
+        }
+
+        if self.image_list.len() < 2 {
+            return;
+        }
+        let Some(current_path) = self.image_list.get(self.current_index).cloned() else {
+            return;
+        };
+        let len = self.image_list.len();
+        let mut keep: HashSet<PathBuf> = HashSet::new();
+        keep.insert(current_path);
+
+        for offset in [1isize, -1isize] {
+            let idx = (self.current_index as isize + offset).rem_euclid(len as isize) as usize;
+            let path = self.image_list[idx].clone();
+            if !keep.insert(path.clone()) {
+                continue; // 画像が2枚しかない場合など (前後が同一ファイル)
+            }
+            if self.prefetched_textures.contains_key(&path) {
+                continue;
+            }
+            // デコード済み (キャッシュ内) の画像のみ対象。未デコードは通常の先読みに任せる
+            let Some(img) = self.image_cache.get(&path) else {
+                continue;
+            };
+            let (w, h) = (img.0.width, img.0.height);
+            let original_image = Arc::clone(&img.0.original_image);
+            // FitWindow 表示時のズーム率 (切替後の表示条件と完全に一致させる)
+            let sx = available_size.x / w as f32;
+            let sy = available_size.y / h as f32;
+            let zoom = sx.min(sy).min(10.0);
+            let tw = ((w as f32 * zoom * ppp).round() as u32).max(1);
+            let th = ((h as f32 * zoom * ppp).round() as u32).max(1);
+            let target = if w > tw || h > th { Some((tw, th)) } else { None };
+            self.prefetched_textures.insert(
+                path,
+                (
+                    target,
+                    Promise::spawn_thread("prefetch_texture", move || {
+                        transform_image(&original_image, 0, false, false, target).0
+                    }),
+                ),
+            );
+        }
+
+        // 表示範囲外になった古いプリフェッチを掃除 (メモリは常時最大2枚分)
+        self.prefetched_textures.retain(|p, _| keep.contains(p));
     }
 
     // テクスチャの再生成は update() の中央パネル処理で TextureKey 比較に基づき
@@ -851,13 +934,38 @@ impl eframe::App for ImageViewerApp {
             };
 
             // テクスチャの変形・リサイズ生成はバックグラウンドスレッドで実施 (UIの固まり防止)
-            if self.rendered_texture_key != Some(texture_key) {
+            if self.rendered_texture_key == Some(texture_key) {
+                // 描画済みなのに残っている進行中の変換は掃除 (回転往復時などの取りこぼし防止)
+                self.pending_texture = None;
+            } else {
                 let pending_matches =
                     matches!(&self.pending_texture, Some((k, _)) if *k == texture_key);
                 let mut spawn_now = false;
                 let mut waiting = false;
 
-                if pending_matches {
+                // アイドル時に先回り生成したテクスチャを消費できるか
+                // (切替直後は必ず回転0・反転なしにリセットされるため、その状態のときのみ有効)
+                let mut prefetch_ready = false;
+                let mut prefetch_waiting = false;
+                if texture_key.rotation_deg == 0 && !texture_key.flip_h && !texture_key.flip_v {
+                    if let Some((target, promise)) = self.prefetched_textures.get(&loaded.path) {
+                        if *target == texture_key.target {
+                            if promise.ready().is_some() {
+                                prefetch_ready = true;
+                            } else {
+                                prefetch_waiting = true;
+                            }
+                        }
+                    }
+                }
+
+                if prefetch_ready {
+                    // 先回り生成済みテクスチャを即座に取り込み (画像切替がほぼゼロ遅延に)
+                    if let Some((_, promise)) = self.prefetched_textures.remove(&loaded.path) {
+                        let color_img = promise.block_until_ready().clone();
+                        self.install_texture(ctx, color_img, texture_key);
+                    }
+                } else if pending_matches {
                     // 生成済みテクスチャの取り込み (ハンドル再利用で GPU 再確保を削減)
                     let done = self
                         .pending_texture
@@ -869,21 +977,13 @@ impl eframe::App for ImageViewerApp {
                     if done {
                         let (_, promise) = self.pending_texture.take().unwrap();
                         let color_img = promise.block_until_ready().clone();
-                        let [tw, th] = color_img.size;
-                        if let Some(handle) = self.texture_handle.as_mut() {
-                            handle.set(color_img, egui::TextureOptions::LINEAR);
-                        } else {
-                            self.texture_handle = Some(ctx.load_texture(
-                                "current_image",
-                                color_img,
-                                egui::TextureOptions::LINEAR,
-                            ));
-                        }
-                        self.texture_pixel_size = Some((tw as u32, th as u32));
-                        self.rendered_texture_key = Some(texture_key);
+                        self.install_texture(ctx, color_img, texture_key);
                     } else {
                         waiting = true;
                     }
+                } else if prefetch_waiting {
+                    // 先回り生成の完了を待つ (同一変換の二重起動を避ける)
+                    waiting = true;
                 } else {
                     // ターゲットサイズのみの変化 (ウィンドウリサイズ/ズーム) はデバウンス、
                     // 回転・反転・画像切替は即座に再生成
@@ -934,6 +1034,12 @@ impl eframe::App for ImageViewerApp {
                 if waiting || spawn_now {
                     ctx.request_repaint_after(std::time::Duration::from_millis(15));
                 }
+            }
+
+            // 現在画像のテクスチャが揃っていれば、前後画像のテクスチャをアイドル時に先回り生成
+            // (切替時にそのまま差し替えることで体感遅延をほぼゼロにする)
+            if self.rendered_texture_key == Some(texture_key) && self.pending_texture.is_none() {
+                self.trigger_texture_prefetch(available_size, ppp);
             }
 
             let Some(ref texture) = self.texture_handle else {
