@@ -81,7 +81,8 @@ pub struct ImageViewerApp {
     /// 前回ウィンドウタイトルへ送信した文字列 (変化時のみ送信)
     last_window_title: String,
     /// サイドバー検索フィルタのキャッシュ (小文字クエリ, 元リストのインデックス一覧)
-    sidebar_filter: (String, Vec<usize>),
+    /// None = 未計算 (起動直後・フォルダ切替直後)。空クエリと区別するため Option を使用
+    sidebar_filter: (Option<String>, Vec<usize>),
     /// サイドバーで最後に自動スクロールした選択インデックス
     last_sidebar_selected: Option<usize>,
 
@@ -119,7 +120,7 @@ impl Default for ImageViewerApp {
             sidebar_search_query: String::new(),
             error_message: None,
             last_window_title: String::new(),
-            sidebar_filter: (String::new(), Vec::new()),
+            sidebar_filter: (None, Vec::new()),
             last_sidebar_selected: None,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
@@ -157,6 +158,9 @@ impl ImageViewerApp {
             let (list, idx) = scan_directory_for_images(&path);
             self.image_list = list;
             self.current_index = idx;
+            // フォルダが変わったためフィルタキャッシュを無効化 (次フレームで再計算)
+            self.sidebar_filter = (None, Vec::new());
+            self.last_sidebar_selected = None;
         }
 
         // キャッシュに既に存在する場合は即座に表示（Arc参照クローンによりO(1)取得）
@@ -170,6 +174,12 @@ impl ImageViewerApp {
 
         // すでに同じ画像を非同期ロード中なら何もしない
         if self.pending_loads.iter().any(|(p, _)| p == &path) {
+            return;
+        }
+
+        // 先読み中ならその完了を待つ (同一ファイルの二重デコード防止。
+        // 完了時に poll_preload_promises が現在画像として表示まで行う)
+        if self.in_flight_preloads.contains(&path) {
             return;
         }
 
@@ -312,21 +322,42 @@ impl ImageViewerApp {
     }
 
     /// バックグラウンド先読みの結果を取り込む
+    /// (完了した画像が現在表示位置そのものだった場合は即座に表示へ適用する)
     fn poll_preload_promises(&mut self) {
+        let current_path = self.image_list.get(self.current_index).cloned();
+        let mut apply_current: Option<Result<LoadedImage, String>> = None;
         self.preload_promises.retain_mut(|promise| {
             if let Some((path, result)) = promise.ready() {
                 let path = path.clone();
                 let result = result.clone();
                 self.in_flight_preloads.remove(&path);
-                if let Ok(loaded_img) = result {
+                if Some(&path) == current_path.as_ref() {
+                    apply_current = Some(result.clone());
+                }
+                if let Ok(loaded_img) = &result {
                     self.cache_tick += 1;
-                    self.image_cache.insert(path, (loaded_img, self.cache_tick));
+                    self.image_cache
+                        .insert(path, (loaded_img.clone(), self.cache_tick));
                 }
                 false
             } else {
                 true
             }
         });
+
+        if let Some(res) = apply_current {
+            match res {
+                Ok(loaded_img) => {
+                    self.invalidate_texture();
+                    self.current_loaded_image = Some(loaded_img);
+                    self.reset_view();
+                    self.trigger_preloading();
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("画像の読み込みに失敗しました: {}", e));
+                }
+            }
+        }
     }
 
     /// 前/次の画像へ切り替え
@@ -623,8 +654,8 @@ impl eframe::App for ImageViewerApp {
             // 検索クエリが変わったときだけフィルタ結果を再計算 (毎フレームの全件アロケート回避)
             let is_filtered = !self.sidebar_search_query.is_empty();
             let query = self.sidebar_search_query.to_lowercase();
-            if self.sidebar_filter.0 != query {
-                self.sidebar_filter.0 = query.clone();
+            if self.sidebar_filter.0.as_deref() != Some(query.as_str()) {
+                self.sidebar_filter.0 = Some(query.clone());
                 self.sidebar_filter.1 = if query.is_empty() {
                     (0..self.image_list.len()).collect()
                 } else {
