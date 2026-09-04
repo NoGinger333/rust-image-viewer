@@ -1,5 +1,5 @@
 use crate::config::{load_config, save_config, AppConfig};
-use crate::font::setup_custom_fonts;
+use crate::font::{icons, setup_custom_fonts};
 use crate::image_loader::{format_bytes, scan_directory_for_images, LoadedImage};
 use eframe::egui;
 use egui::{Color32, Context, Sense, TextureHandle, Vec2};
@@ -339,7 +339,7 @@ impl eframe::App for ImageViewerApp {
 
                 // ファイルを開く
                 if ui
-                    .add(icon_btn("🗁"))
+                    .add(icon_btn(icons::FOLDER_OPEN))
                     .on_hover_text("ファイルを開く (Ctrl+O)")
                     .clicked()
                 {
@@ -353,7 +353,7 @@ impl eframe::App for ImageViewerApp {
 
                 // サイドバー切替
                 if ui
-                    .add(icon_btn("☰"))
+                    .add(icon_btn(icons::MENU))
                     .on_hover_text("サイドバー (画像一覧) の表示切替")
                     .clicked()
                 {
@@ -365,7 +365,7 @@ impl eframe::App for ImageViewerApp {
 
                 // ズームコントロール (拡大・縮小)
                 if ui
-                    .add(icon_btn("🔍+"))
+                    .add(icon_btn(icons::ZOOM_IN))
                     .on_hover_text("拡大")
                     .clicked()
                 {
@@ -374,7 +374,7 @@ impl eframe::App for ImageViewerApp {
                 }
 
                 if ui
-                    .add(icon_btn("🔍-"))
+                    .add(icon_btn(icons::ZOOM_OUT))
                     .on_hover_text("縮小")
                     .clicked()
                 {
@@ -393,7 +393,7 @@ impl eframe::App for ImageViewerApp {
                 }
 
                 if ui
-                    .add(toggle_btn(icon_text("⛶"), self.view_mode == ViewMode::FitWindow))
+                    .add(toggle_btn(icon_text(icons::FIT_SCREEN), self.view_mode == ViewMode::FitWindow))
                     .on_hover_text("ウィンドウにフィット")
                     .clicked()
                 {
@@ -417,7 +417,7 @@ impl eframe::App for ImageViewerApp {
 
                 // 回転・反転
                 if ui
-                    .add(icon_btn("⟳"))
+                    .add(icon_btn(icons::ROTATE_RIGHT))
                     .on_hover_text("90°時計回りに回転")
                     .clicked()
                 {
@@ -425,7 +425,7 @@ impl eframe::App for ImageViewerApp {
                     self.update_texture(ctx);
                 }
                 if ui
-                    .add(icon_btn("⇄"))
+                    .add(icon_btn(icons::FLIP))
                     .on_hover_text("左右反転")
                     .clicked()
                 {
@@ -433,7 +433,7 @@ impl eframe::App for ImageViewerApp {
                     self.update_texture(ctx);
                 }
                 if ui
-                    .add(icon_btn("⇅"))
+                    .add(icon_btn(icons::SWAP_VERT))
                     .on_hover_text("上下反転")
                     .clicked()
                 {
@@ -445,7 +445,7 @@ impl eframe::App for ImageViewerApp {
 
                 // リセット
                 if ui
-                    .add(icon_btn("↺"))
+                    .add(icon_btn(icons::REFRESH))
                     .on_hover_text("表示位置・ズームをリセット")
                     .clicked()
                 {
@@ -458,7 +458,7 @@ impl eframe::App for ImageViewerApp {
                     ui.add_space(8.0);
 
                     let is_dark = ctx.style().visuals.dark_mode;
-                    let theme_icon = if is_dark { "☀" } else { "🌙" };
+                    let theme_icon = if is_dark { icons::LIGHT_MODE } else { icons::DARK_MODE };
                     let theme_tooltip = if is_dark {
                         "ライトモードに切り替え"
                     } else {
@@ -490,15 +490,15 @@ impl eframe::App for ImageViewerApp {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("Unknown");
-                    ui.label(format!("📄 {}", filename));
+                    ui.label(format!("{} {}", icons::IMAGE, filename));
                     ui.separator();
-                    ui.label(format!("📐 {} x {} px", img.width, img.height));
+                    ui.label(format!("{} {} x {} px", icons::ASPECT_RATIO, img.width, img.height));
                     ui.separator();
-                    ui.label(format!("💾 {}", format_bytes(img.file_size_bytes)));
+                    ui.label(format!("{} {}", icons::SD_STORAGE, format_bytes(img.file_size_bytes)));
                     ui.separator();
-                    ui.label(format!("🔍 {:.0}%", self.zoom_factor * 100.0));
+                    ui.label(format!("{} {:.0}%", icons::ZOOM_IN, self.zoom_factor * 100.0));
                     ui.separator();
-                    ui.label(format!("📂 {} / {}", self.current_index + 1, self.image_list.len()));
+                    ui.label(format!("{} {} / {}", icons::COLLECTIONS, self.current_index + 1, self.image_list.len()));
                 } else {
                     ui.label("画像を読み込んでください（ドラッグ＆ドロップ可能）");
                 }
@@ -529,9 +529,9 @@ impl eframe::App for ImageViewerApp {
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
                     let header_text = if !is_filtered {
-                        format!("📁 フォルダ内一覧 ({} 件)", self.image_list.len())
+                        format!("{} フォルダ内一覧 ({} 件)", icons::FOLDER, self.image_list.len())
                     } else {
-                        format!("📁 フォルダ内一覧 ({} / {} 件)", filtered_count, self.image_list.len())
+                        format!("{} フォルダ内一覧 ({} / {} 件)", icons::FOLDER, filtered_count, self.image_list.len())
                     };
                     ui.label(egui::RichText::new(header_text).strong());
 
@@ -545,11 +545,11 @@ impl eframe::App for ImageViewerApp {
                             };
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.sidebar_search_query)
-                                    .hint_text("🔍 ファイル名で検索...")
+                                    .hint_text(format!("{} ファイル名で検索...", icons::SEARCH))
                                     .desired_width(width),
                             );
                             if is_filtered
-                                && ui.button("✖").on_hover_text("検索をクリア").clicked()
+                                && ui.button(icons::CLOSE).on_hover_text("検索をクリア").clicked()
                             {
                                 self.sidebar_search_query.clear();
                             }
@@ -576,12 +576,12 @@ impl eframe::App for ImageViewerApp {
 
                                     if is_filtered && !name.to_lowercase().contains(&query) {
                                         continue;
-                                    }
+                                     }
 
                                     let selected = idx == self.current_index;
                                     let response = ui.add_sized(
                                         [ui.available_width(), 24.0],
-                                        egui::SelectableLabel::new(selected, format!("📄 {}", name)),
+                                        egui::SelectableLabel::new(selected, format!("{} {}", icons::IMAGE, name)),
                                     );
 
                                     if selected {
@@ -616,11 +616,15 @@ impl eframe::App for ImageViewerApp {
             let Some(ref loaded) = self.current_loaded_image else {
                 ui.centered_and_justified(|ui| {
                     ui.vertical_centered(|ui| {
-                        ui.heading("📷 Rust 画像ビューア");
+                        ui.label(egui::RichText::new(icons::IMAGE).size(48.0));
+                        ui.heading("Rust 画像ビューア");
                         ui.add_space(10.0);
                         ui.label("画像ファイルをここにドラッグ＆ドロップするか");
                         ui.add_space(5.0);
-                        if ui.button("📂 画像ファイルを選択").clicked() {
+                        if ui
+                            .button(format!("{} 画像ファイルを選択", icons::FOLDER_OPEN))
+                            .clicked()
+                        {
                             if let Some(path) = FileDialog::new()
                                 .add_filter("Image Files", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
                                 .pick_file()
@@ -794,7 +798,15 @@ impl eframe::App for ImageViewerApp {
                         ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::from_rgba_unmultiplied(text_color.r(), text_color.g(), text_color.b(), alpha_u8);
                         ui.visuals_mut().widgets.hovered.fg_stroke.color = Color32::WHITE;
 
-                        if ui.put(left_btn_rect, egui::Button::new("◀")).clicked() {
+                        if ui
+                            .put(
+                                left_btn_rect,
+                                egui::Button::new(
+                                    egui::RichText::new(icons::CHEVRON_LEFT).size(22.0),
+                                ),
+                            )
+                            .clicked()
+                        {
                             pending_navigation = Some(-1);
                         }
                     });
@@ -809,7 +821,15 @@ impl eframe::App for ImageViewerApp {
                         ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::from_rgba_unmultiplied(text_color.r(), text_color.g(), text_color.b(), alpha_u8);
                         ui.visuals_mut().widgets.hovered.fg_stroke.color = Color32::WHITE;
 
-                        if ui.put(right_btn_rect, egui::Button::new("▶")).clicked() {
+                        if ui
+                            .put(
+                                right_btn_rect,
+                                egui::Button::new(
+                                    egui::RichText::new(icons::CHEVRON_RIGHT).size(22.0),
+                                ),
+                            )
+                            .clicked()
+                        {
                             pending_navigation = Some(1);
                         }
                     });
