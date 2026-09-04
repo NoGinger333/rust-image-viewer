@@ -29,7 +29,16 @@ pub fn setup_custom_fonts(ctx: &Context) {
 
     fonts.font_data.insert(
         "material_icons".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/MaterialIcons-Regular.ttf")),
+        egui::FontData {
+            font: std::borrow::Cow::Borrowed(include_bytes!("../assets/MaterialIcons-Regular.ttf")),
+            index: 0,
+            tweak: egui::FontTweak {
+                // アイコングリフが行ボックス内で上に寄って描画されるため、
+                // 上下の余白を等間隔にする下方オフセット (フォントサイズに比例)
+                y_offset_factor: 0.28,
+                ..Default::default()
+            },
+        },
     );
     fonts
         .families

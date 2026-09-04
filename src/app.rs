@@ -301,10 +301,13 @@ impl eframe::App for ImageViewerApp {
         });
 
         // ツールバー (TopPanel) - 超モダン＆洗練されたベクトルUIアイコン
-        egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
-            ui.add_space(2.0);
+        // パネル高さを固定し、horizontal_centered による自動センタリングで
+        // アイコンの上下の余白を常に等間隔に保つ (egui が DPI を自動スケール)
+        const TOOLBAR_HEIGHT: f32 = 44.0; // ボタン28pt + 上下マージン8ptずつ
+        egui::TopBottomPanel::top("top_toolbar")
+            .exact_height(TOOLBAR_HEIGHT)
+            .show(ctx, |ui| {
             ui.style_mut().spacing.item_spacing = Vec2::new(12.0, 0.0);
-            ui.style_mut().spacing.button_padding = Vec2::new(6.0, 5.0);
 
             // セパレーターの主張を抑制（半透明グレー）
             let sep_color = if ctx.style().visuals.dark_mode {
