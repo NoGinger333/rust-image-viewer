@@ -1,15 +1,20 @@
 use crate::config::{load_config, save_config, AppConfig};
 use crate::font::{icons, setup_custom_fonts};
-use crate::image_loader::{format_bytes, scan_directory_for_images, LoadedImage};
+use crate::image_loader::{format_bytes, scan_directory_for_images, transform_image, LoadedImage};
 use eframe::egui;
-use egui::{Color32, Context, Sense, TextureHandle, Vec2};
+use egui::{Color32, ColorImage, Context, Sense, TextureHandle, Vec2};
 use poll_promise::Promise;
 use rfd::FileDialog;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 最大キャッシュ画像数（メモリ節約とレスポンス向上）
 const MAX_CACHE_SIZE: usize = 20;
+/// キャッシュ合計バイト数の上限（デコード後の原画像データ量合計。超過時は LRU で削除）
+const MAX_CACHE_BYTES: u64 = 768 * 1024 * 1024;
+/// リサイズ確定までのデバウンス時間
+const RESIZE_DEBOUNCE_MS: u128 = 180;
 
 /// 表示モード
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -19,21 +24,41 @@ pub enum ViewMode {
     OriginalSize,
 }
 
+/// テクスチャの再生成が必要かを判定するキー (画像世代 + 変形 + リサイズ後サイズ)
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct TextureKey {
+    image_generation: u64,
+    rotation_deg: i32,
+    flip_h: bool,
+    flip_v: bool,
+    target: Option<(u32, u32)>,
+}
+
 pub struct ImageViewerApp {
     /// 現在読み込んでいる画像データ
     current_loaded_image: Option<LoadedImage>,
     /// 表示用eguiテクスチャ
     texture_handle: Option<TextureHandle>,
-    /// 描画済みのターゲットサイズ
-    rendered_target_size: Option<(u32, u32)>,
-    /// リサイズデバウンス判定用
-    last_target_size: Option<(u32, u32)>,
-    last_target_size_change_time: std::time::Instant,
+    /// 現在テクスチャへ反映済みの状態 (画像世代 + 変形 + リサイズ後サイズ)
+    rendered_texture_key: Option<TextureKey>,
+    /// バックグラウンドで生成中のテクスチャ (完了次第差し替え)
+    pending_texture: Option<(TextureKey, Promise<ColorImage>)>,
+    /// 画像が切り替わった回数 (テクスチャキーの画像識別子)
+    image_generation: u64,
+    /// リサイズデバウンス判定用 (ターゲットサイズの変化のみ対象)
+    last_target_key: Option<(u32, u32)>,
+    last_target_change_time: std::time::Instant,
 
-    /// デコード済み画像のキャッシュ (パス -> LoadedImage)
-    image_cache: HashMap<PathBuf, LoadedImage>,
+    /// デコード済み画像のキャッシュ (パス -> (画像, 最終アクセスtick)) ※LRU+容量制限付き
+    image_cache: HashMap<PathBuf, (LoadedImage, u64)>,
+    /// LRU 用アクセスカウンタ
+    cache_tick: u64,
     /// バックグラウンドで先読み中のPromise一覧
     preload_promises: Vec<Promise<(PathBuf, Result<LoadedImage, String>)>>,
+    /// 先読み実行中のパス (同一画像の二重デコード防止)
+    in_flight_preloads: HashSet<PathBuf>,
+    /// キャッシュミス時に非同期ロード中の画像 (UIスレッドをブロックしない)
+    pending_loads: Vec<(PathBuf, Promise<Result<LoadedImage, String>>)>,
 
     /// ディレクトリ内の画像一覧
     image_list: Vec<PathBuf>,
@@ -51,6 +76,12 @@ pub struct ImageViewerApp {
     config: AppConfig,
     sidebar_search_query: String,
     error_message: Option<String>,
+    /// 前回ウィンドウタイトルへ送信した文字列 (変化時のみ送信)
+    last_window_title: String,
+    /// サイドバー検索フィルタのキャッシュ (小文字クエリ, 元リストのインデックス一覧)
+    sidebar_filter: (String, Vec<usize>),
+    /// サイドバーで最後に自動スクロールした選択インデックス
+    last_sidebar_selected: Option<usize>,
 
     /// ホイールによるページ移動用ロック＆タイマー
     scroll_locked: bool,
@@ -63,11 +94,16 @@ impl Default for ImageViewerApp {
         Self {
             current_loaded_image: None,
             texture_handle: None,
-            rendered_target_size: None,
-            last_target_size: None,
-            last_target_size_change_time: std::time::Instant::now(),
+            rendered_texture_key: None,
+            pending_texture: None,
+            image_generation: 0,
+            last_target_key: None,
+            last_target_change_time: std::time::Instant::now(),
             image_cache: HashMap::new(),
+            cache_tick: 0,
             preload_promises: Vec::new(),
+            in_flight_preloads: HashSet::new(),
+            pending_loads: Vec::new(),
             image_list: Vec::new(),
             current_index: 0,
             zoom_factor: 1.0,
@@ -79,6 +115,9 @@ impl Default for ImageViewerApp {
             config,
             sidebar_search_query: String::new(),
             error_message: None,
+            last_window_title: String::new(),
+            sidebar_filter: (String::new(), Vec::new()),
+            last_sidebar_selected: None,
             scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
         }
@@ -98,8 +137,6 @@ impl ImageViewerApp {
     /// 画像の読み込み処理 (フォルダ再走査のキャッシュ & バックグラウンド先読みの最適化)
     fn open_image_file(&mut self, path: PathBuf) {
         self.error_message = None;
-        self.texture_handle = None; // テクスチャ更新フラグのリセット
-        self.rendered_target_size = None;
 
         let parent_dir = path.parent().map(|p| p.to_path_buf());
 
@@ -119,28 +156,90 @@ impl ImageViewerApp {
             self.current_index = idx;
         }
 
-        self.texture_handle = None;
-        self.rendered_target_size = None;
-
-        // キャッシュに既に存在する場合は即座に表示（Arc参照クローンによりO(1)爆速取得）
-        if let Some(cached_image) = self.image_cache.get(&path).cloned() {
+        // キャッシュに既に存在する場合は即座に表示（Arc参照クローンによりO(1)取得）
+        if let Some(cached_image) = self.cache_get(&path) {
+            self.invalidate_texture();
             self.current_loaded_image = Some(cached_image);
             self.reset_view();
             self.trigger_preloading();
             return;
         }
 
-        // キャッシュにない場合は即時ロード
-        match LoadedImage::load_from_path(&path) {
-            Ok(loaded_img) => {
-                self.image_cache.insert(path.clone(), loaded_img.clone());
-                self.current_loaded_image = Some(loaded_img);
-                self.reset_view();
-                self.trigger_preloading();
-            }
-            Err(err) => {
-                self.error_message = Some(format!("画像の読み込みに失敗しました: {}", err));
-            }
+        // すでに同じ画像を非同期ロード中なら何もしない
+        if self.pending_loads.iter().any(|(p, _)| p == &path) {
+            return;
+        }
+
+        // キャッシュにない場合はバックグラウンドで非同期ロード (UIスレッドをブロックしない)
+        let path_clone = path.clone();
+        let promise = Promise::spawn_thread("load_image", move || {
+            LoadedImage::load_from_path(&path_clone).map_err(|e| e.to_string())
+        });
+        self.pending_loads.push((path, promise));
+    }
+
+    /// 表示画像が変わる際にテクスチャ関連の状態をリセット
+    fn invalidate_texture(&mut self) {
+        self.image_generation += 1;
+        self.texture_handle = None;
+        self.pending_texture = None;
+        self.rendered_texture_key = None;
+    }
+
+    /// キャッシュ参照 (LRU のアクセス時刻を更新)
+    fn cache_get(&mut self, path: &std::path::Path) -> Option<LoadedImage> {
+        if let Some((img, tick)) = self.image_cache.get_mut(path) {
+            self.cache_tick += 1;
+            *tick = self.cache_tick;
+            Some(img.clone())
+        } else {
+            None
+        }
+    }
+
+    /// キャッシュミスで起動した非同期ロードの完了を取り込む (表示中の画像が完成次第即表示)
+    fn poll_pending_loads(&mut self) {
+        if self.pending_loads.is_empty() {
+            return;
+        }
+
+        let current_path = self.image_list.get(self.current_index).cloned();
+        let mut loaded_current: Option<LoadedImage> = None;
+        let mut failed_current: Option<String> = None;
+        self.cache_tick += 1;
+        let tick = self.cache_tick;
+        {
+            let cache = &mut self.image_cache;
+            self.pending_loads.retain_mut(|(path, promise)| {
+                if let Some(result) = promise.ready() {
+                    let result = result.clone();
+                    match result {
+                        Ok(loaded_img) => {
+                            if current_path.as_ref() == Some(path) {
+                                loaded_current = Some(loaded_img.clone());
+                            }
+                            cache.insert(path.clone(), (loaded_img, tick));
+                        }
+                        Err(e) => {
+                            if current_path.as_ref() == Some(path) {
+                                failed_current = Some(e);
+                            }
+                        }
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
+        if let Some(loaded_img) = loaded_current {
+            self.invalidate_texture();
+            self.current_loaded_image = Some(loaded_img);
+            self.reset_view();
+            self.trigger_preloading();
+        } else if let Some(err) = failed_current {
+            self.error_message = Some(format!("画像の読み込みに失敗しました: {}", err));
         }
     }
 
@@ -161,17 +260,43 @@ impl ImageViewerApp {
             paths_to_preload.push(self.image_list[prev_idx].clone());
         }
 
-        // 古い遠いキャッシュの削除（メモリ節約）
-        if self.image_cache.len() > MAX_CACHE_SIZE {
-            let keep_set: std::collections::HashSet<&PathBuf> =
-                paths_to_preload.iter().chain(std::iter::once(&self.image_list[self.current_index])).collect();
-
-            self.image_cache.retain(|path, _| keep_set.contains(path));
+        // LRU + 合計バイト数でキャッシュを削限 (表示中・先読み対象・ロード中は必ず保持)
+        let keep_set: HashSet<PathBuf> = paths_to_preload
+            .iter()
+            .chain(std::iter::once(&self.image_list[self.current_index]))
+            .chain(self.pending_loads.iter().map(|(p, _)| p))
+            .cloned()
+            .collect();
+        loop {
+            let total_bytes: u64 = self
+                .image_cache
+                .values()
+                .map(|(img, _)| img.original_image.as_bytes().len() as u64)
+                .sum();
+            if self.image_cache.len() <= MAX_CACHE_SIZE && total_bytes <= MAX_CACHE_BYTES {
+                break;
+            }
+            // 保護対象以外からもっとも古く使われた画像を 1 つ削除
+            let victim = self
+                .image_cache
+                .iter()
+                .filter(|(path, _)| !keep_set.contains(*path))
+                .min_by_key(|(_, (_, tick))| *tick)
+                .map(|(path, _)| path.clone());
+            match victim {
+                Some(path) => {
+                    self.image_cache.remove(&path);
+                }
+                None => break, // 削除候補なし
+            }
         }
 
-        // まだ先読み中・キャッシュにない画像のみ非同期ロード
+        // まだ先読み中・キャッシュ済み・非同期ロード中でない画像のみ非同期ロード (二重起動防止)
         for path in paths_to_preload {
-            if !self.image_cache.contains_key(&path) {
+            if !self.image_cache.contains_key(&path)
+                && !self.pending_loads.iter().any(|(p, _)| p == &path)
+                && self.in_flight_preloads.insert(path.clone())
+            {
                 let path_clone = path.clone();
                 let promise = Promise::spawn_thread("preload_image", move || {
                     let res = LoadedImage::load_from_path(&path_clone).map_err(|e| e.to_string());
@@ -186,8 +311,12 @@ impl ImageViewerApp {
     fn poll_preload_promises(&mut self) {
         self.preload_promises.retain_mut(|promise| {
             if let Some((path, result)) = promise.ready() {
+                let path = path.clone();
+                let result = result.clone();
+                self.in_flight_preloads.remove(&path);
                 if let Ok(loaded_img) = result {
-                    self.image_cache.insert(path.clone(), loaded_img.clone());
+                    self.cache_tick += 1;
+                    self.image_cache.insert(path, (loaded_img, self.cache_tick));
                 }
                 false
             } else {
@@ -208,7 +337,7 @@ impl ImageViewerApp {
         self.open_image_file(target_path);
     }
 
-    /// 視点のリセット
+    /// 視点のリセット (テクスチャは中央パネルのキー比較で必要時のみ自動再生成)
     fn reset_view(&mut self) {
         self.zoom_factor = 1.0;
         self.pan_offset = Vec2::ZERO;
@@ -216,42 +345,19 @@ impl ImageViewerApp {
         self.flip_h = false;
         self.flip_v = false;
         self.view_mode = ViewMode::FitWindow;
-        self.rendered_target_size = None;
     }
 
-    /// テクスチャの再生成 (モアレ防止の高品質アンチエイリアシング縮小適用)
-    fn update_texture_with_target_size(&mut self, ctx: &Context, target_size: Option<(u32, u32)>) {
-        if let Some(ref loaded) = self.current_loaded_image {
-            let (color_img, _w, _h) =
-                loaded.transform_color_image(
-                    self.rotation_deg,
-                    self.flip_h,
-                    self.flip_v,
-                    target_size,
-                );
-
-            let handle = ctx.load_texture(
-                "current_image",
-                color_img,
-                egui::TextureOptions::LINEAR,
-            );
-            self.texture_handle = Some(handle);
-            self.rendered_target_size = target_size;
-        }
-    }
-
-    fn update_texture(&mut self, ctx: &Context) {
-        self.rendered_target_size = None;
-        self.update_texture_with_target_size(ctx, None);
-    }
+    // テクスチャの再生成は update() の中央パネル処理で TextureKey 比較に基づき
+    // バックグラウンドスレッド (transform_image) で行うため、同期版メソッドは廃止。
 }
 
 impl eframe::App for ImageViewerApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // バックグラウンドで進行中の画像先読みプロミスを更新
+        // バックグラウンドで進行中の画像先読み・ロードのプロミスを更新
         self.poll_preload_promises();
+        self.poll_pending_loads();
 
-        // ウィンドウタイトルを開いているファイル名に合わせて動的更新
+        // ウィンドウタイトルを開いているファイル名に合わせて動的更新 (変化時のみ送信)
         let window_title = if let Some(ref img) = self.current_loaded_image {
             let filename = img
                 .path
@@ -262,7 +368,10 @@ impl eframe::App for ImageViewerApp {
         } else {
             "Rust 画像ビューア (Image Viewer)".to_string()
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title));
+        if self.last_window_title != window_title {
+            self.last_window_title = window_title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title));
+        }
 
         // ドラッグ＆ドロップ受け取り
         if !ctx.input(|i| i.raw.dropped_files.is_empty()) {
@@ -270,7 +379,6 @@ impl eframe::App for ImageViewerApp {
             if let Some(file) = dropped.first() {
                 if let Some(path) = &file.path {
                     self.open_image_file(path.clone());
-                    self.update_texture(ctx);
                 }
             }
         }
@@ -425,7 +533,6 @@ impl eframe::App for ImageViewerApp {
                     .clicked()
                 {
                     self.rotation_deg = (self.rotation_deg + 90) % 360;
-                    self.update_texture(ctx);
                 }
                 if ui
                     .add(icon_btn(icons::FLIP))
@@ -433,7 +540,6 @@ impl eframe::App for ImageViewerApp {
                     .clicked()
                 {
                     self.flip_h = !self.flip_h;
-                    self.update_texture(ctx);
                 }
                 if ui
                     .add(icon_btn(icons::SWAP_VERT))
@@ -441,7 +547,6 @@ impl eframe::App for ImageViewerApp {
                     .clicked()
                 {
                     self.flip_v = !self.flip_v;
-                    self.update_texture(ctx);
                 }
 
                 ui.separator();
@@ -453,7 +558,6 @@ impl eframe::App for ImageViewerApp {
                     .clicked()
                 {
                     self.reset_view();
-                    self.update_texture(ctx);
                 }
 
                 // テーマ切替ボタン (右寄せ)
@@ -512,19 +616,28 @@ impl eframe::App for ImageViewerApp {
         if self.config.show_sidebar {
             let mut selected_to_open = None;
 
+            // 検索クエリが変わったときだけフィルタ結果を再計算 (毎フレームの全件アロケート回避)
             let is_filtered = !self.sidebar_search_query.is_empty();
             let query = self.sidebar_search_query.to_lowercase();
-            let filtered_count = if is_filtered {
-                self.image_list
-                    .iter()
-                    .filter(|p| {
-                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                        name.to_lowercase().contains(&query)
-                    })
-                    .count()
-            } else {
-                self.image_list.len()
-            };
+            if self.sidebar_filter.0 != query {
+                self.sidebar_filter.0 = query.clone();
+                self.sidebar_filter.1 = if query.is_empty() {
+                    (0..self.image_list.len()).collect()
+                } else {
+                    self.image_list
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| {
+                            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            name.to_lowercase().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect()
+                };
+                self.last_sidebar_selected = None; // フィルタ変更時は選択位置へ再センタリング
+            }
+            let filtered_indices = &self.sidebar_filter.1;
+            let filtered_count = filtered_indices.len();
 
             egui::SidePanel::left("image_sidebar")
                 .default_width(175.0)
@@ -568,34 +681,51 @@ impl eframe::App for ImageViewerApp {
                         ui.add_space(10.0);
                         ui.label("一致する画像がありません");
                     } else {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                for (idx, path) in self.image_list.iter().enumerate() {
-                                    let name = path
-                                        .file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("File");
+                        const ROW_HEIGHT: f32 = 30.0; // 24pt の行 + 6pt の間隔
 
-                                    if is_filtered && !name.to_lowercase().contains(&query) {
-                                        continue;
-                                     }
+                        // 選択画像が変わったときだけ一覧の中央へ自動スクロール (仮想化のためオフセット指定)
+                        let mut scroll_to_row = None;
+                        if self.last_sidebar_selected != Some(self.current_index) {
+                            scroll_to_row = filtered_indices
+                                .iter()
+                                .position(|&i| i == self.current_index);
+                            self.last_sidebar_selected = Some(self.current_index);
+                        }
+                        let visible_rows = (ui.available_height() / ROW_HEIGHT).max(1.0);
 
-                                    let selected = idx == self.current_index;
-                                    let response = ui.add_sized(
-                                        [ui.available_width(), 24.0],
-                                        egui::SelectableLabel::new(selected, format!("{} {}", icons::IMAGE, name)),
-                                    );
+                        let mut scroll_area =
+                            egui::ScrollArea::vertical().auto_shrink([false, false]);
+                        if let Some(row) = scroll_to_row {
+                            let center_offset =
+                                (row as f32 * ROW_HEIGHT) - (visible_rows * ROW_HEIGHT / 2.0);
+                            scroll_area =
+                                scroll_area.vertical_scroll_offset(center_offset.max(0.0));
+                        }
 
-                                    if selected {
-                                        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
-                                    }
+                        // 表示中の行のウィジェットのみ生成 (大量画像フォルダでもフレーム時間が増えない)
+                        scroll_area.show_rows(ui, ROW_HEIGHT, filtered_indices.len(), |ui, range| {
+                            for row in range {
+                                let idx = filtered_indices[row];
+                                let path = &self.image_list[idx];
+                                let name = path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("File");
 
-                                    if response.clicked() && idx != self.current_index {
-                                        selected_to_open = Some((idx, path.clone()));
-                                    }
+                                let selected = idx == self.current_index;
+                                let response = ui.add_sized(
+                                    [ui.available_width(), 24.0],
+                                    egui::SelectableLabel::new(
+                                        selected,
+                                        format!("{} {}", icons::IMAGE, name),
+                                    ),
+                                );
+
+                                if response.clicked() && idx != self.current_index {
+                                    selected_to_open = Some((idx, path.clone()));
                                 }
-                            });
+                            }
+                        });
                     }
                 });
 
@@ -676,25 +806,97 @@ impl eframe::App for ImageViewerApp {
                 None
             };
 
-            let mut should_update = self.texture_handle.is_none();
+            // テクスチャキー (画像世代 + 変形 + リサイズ後サイズ)
+            let texture_key = TextureKey {
+                image_generation: self.image_generation,
+                rotation_deg: rot,
+                flip_h: self.flip_h,
+                flip_v: self.flip_v,
+                target: target_size,
+            };
 
-            if !should_update && self.rendered_target_size != target_size {
-                if self.last_target_size != target_size {
-                    self.last_target_size = target_size;
-                    self.last_target_size_change_time = std::time::Instant::now();
-                }
+            // テクスチャの変形・リサイズ生成はバックグラウンドスレッドで実施 (UIの固まり防止)
+            if self.rendered_texture_key != Some(texture_key) {
+                let pending_matches =
+                    matches!(&self.pending_texture, Some((k, _)) if *k == texture_key);
+                let mut spawn_now = false;
+                let mut waiting = false;
 
-                if self.last_target_size_change_time.elapsed().as_millis() >= 180 {
-                    should_update = true;
+                if pending_matches {
+                    // 生成済みテクスチャの取り込み (ハンドル再利用で GPU 再確保を削減)
+                    let done = self
+                        .pending_texture
+                        .as_mut()
+                        .expect("pending_texture exists")
+                        .1
+                        .ready()
+                        .is_some();
+                    if done {
+                        let (_, promise) = self.pending_texture.take().unwrap();
+                        let color_img = promise.block_until_ready().clone();
+                        if let Some(handle) = self.texture_handle.as_mut() {
+                            handle.set(color_img, egui::TextureOptions::LINEAR);
+                        } else {
+                            self.texture_handle = Some(ctx.load_texture(
+                                "current_image",
+                                color_img,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        }
+                        self.rendered_texture_key = Some(texture_key);
+                    } else {
+                        waiting = true;
+                    }
                 } else {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(20));
-                }
-            }
+                    // ターゲットサイズのみの変化 (ウィンドウリサイズ/ズーム) はデバウンス、
+                    // 回転・反転・画像切替は即座に再生成
+                    let only_target_changed = match self.rendered_texture_key {
+                        Some(k) => {
+                            k.image_generation == texture_key.image_generation
+                                && k.rotation_deg == texture_key.rotation_deg
+                                && k.flip_h == texture_key.flip_h
+                                && k.flip_v == texture_key.flip_v
+                        }
+                        None => false,
+                    };
 
-            if should_update {
-                self.update_texture_with_target_size(ctx, target_size);
-                self.rendered_target_size = target_size;
-                self.last_target_size = target_size;
+                    if only_target_changed && self.texture_handle.is_some() {
+                        if self.last_target_key != target_size {
+                            self.last_target_key = target_size;
+                            self.last_target_change_time = std::time::Instant::now();
+                        }
+                        if self.last_target_change_time.elapsed().as_millis()
+                            >= RESIZE_DEBOUNCE_MS
+                        {
+                            spawn_now = true;
+                        } else {
+                            waiting = true;
+                        }
+                    } else {
+                        spawn_now = true;
+                    }
+
+                    if spawn_now {
+                        let original_image = Arc::clone(&loaded.original_image);
+                        self.pending_texture = Some((
+                            texture_key,
+                            Promise::spawn_thread("transform_image", move || {
+                                transform_image(
+                                    &original_image,
+                                    texture_key.rotation_deg,
+                                    texture_key.flip_h,
+                                    texture_key.flip_v,
+                                    texture_key.target,
+                                )
+                                .0
+                            }),
+                        ));
+                    }
+                }
+
+                if waiting || spawn_now {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(15));
+                }
             }
 
             let Some(ref texture) = self.texture_handle else {
@@ -770,6 +972,18 @@ impl eframe::App for ImageViewerApp {
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+
+            // 非同期ロード中のインジケータ (現在の画像がバックグラウンドで読み込み中のとき表示)
+            let loading_current = self.pending_loads.iter().any(|(p, _)| {
+                self.image_list.get(self.current_index).map(|cp| cp == p) == Some(true)
+            });
+            if loading_current {
+                let spinner_rect = egui::Rect::from_min_size(
+                    ui.max_rect().right_top() + Vec2::new(-52.0, 12.0),
+                    Vec2::new(36.0, 36.0),
+                );
+                ui.put(spinner_rect, egui::Spinner::new().size(32.0));
+            }
 
             // ナビゲーションボタン（左右のオーバーレイ：カーソル近接時に「ふわぁ」とスムーズにフェードイン/アウト）
             if !self.image_list.is_empty() {
