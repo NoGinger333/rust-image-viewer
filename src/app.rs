@@ -93,8 +93,7 @@ pub struct ImageViewerApp {
     /// サイドバーで最後に自動スクロールした選択インデックス
     last_sidebar_selected: Option<usize>,
 
-    /// ホイールによるページ移動用ロック＆タイマー
-    scroll_locked: bool,
+    /// ホイールによるページ移動のクールダウン判定用タイマー
     last_scroll_navigate_time: std::time::Instant,
 }
 
@@ -131,7 +130,6 @@ impl Default for ImageViewerApp {
             last_window_title: String::new(),
             sidebar_filter: (None, Vec::new()),
             last_sidebar_selected: None,
-            scroll_locked: false,
             last_scroll_navigate_time: std::time::Instant::now(),
         }
     }
@@ -1095,28 +1093,22 @@ impl eframe::App for ImageViewerApp {
             let ctrl_pressed = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
             let elapsed_ms = self.last_scroll_navigate_time.elapsed().as_millis();
 
-            if wheel_delta_y == 0.0 {
-                if elapsed_ms > 150 {
-                    self.scroll_locked = false;
-                }
-            } else if is_hovered {
+            if wheel_delta_y != 0.0 && is_hovered {
                 if ctrl_pressed {
                     // Ctrl + ホイールスクロール = 拡大・縮小 (ズーム)
                     let zoom_multiplier = (wheel_delta_y * 0.035).exp();
                     self.zoom_factor = (self.zoom_factor * zoom_multiplier).clamp(0.05, 50.0);
                     self.view_mode = ViewMode::FreeZoom;
-                } else {
-                    // 通常のマウスホイール = ページ送り (爆速デコード画像群でも絶対に1ノッチ1枚固定)
-                    if !self.scroll_locked && elapsed_ms > 180 {
-                        if wheel_delta_y < -0.05 {
-                            pending_navigation = Some(1); // 下スクロール -> 次の画像へ
-                            self.scroll_locked = true;
-                            self.last_scroll_navigate_time = std::time::Instant::now();
-                        } else if wheel_delta_y > 0.05 {
-                            pending_navigation = Some(-1); // 上スクロール -> 前の画像へ
-                            self.scroll_locked = true;
-                            self.last_scroll_navigate_time = std::time::Instant::now();
-                        }
+                } else if elapsed_ms > 150 {
+                    // 通常のマウスホイール = ページ送り
+                    // 前回移動から150ms経過していれば必ず次の1枚へ進む (時刻ベースのクールダウンで
+                    // 1ノッチ1枚を保証。連続回転中でも確実に切り替わる)
+                    if wheel_delta_y < -0.05 {
+                        pending_navigation = Some(1); // 下スクロール -> 次の画像へ
+                        self.last_scroll_navigate_time = std::time::Instant::now();
+                    } else if wheel_delta_y > 0.05 {
+                        pending_navigation = Some(-1); // 上スクロール -> 前の画像へ
+                        self.last_scroll_navigate_time = std::time::Instant::now();
                     }
                 }
             }
