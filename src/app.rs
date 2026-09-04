@@ -861,27 +861,41 @@ impl eframe::App for ImageViewerApp {
                 return;
             }
 
-            // 画像なし状態のウェルカム画面
+            // 画像なし状態のウェルカム画面 (初回オープンの読み込み中はローディング表示に切替)
             let Some(ref loaded) = self.current_loaded_image else {
+                let loading_first = self
+                    .pending_loads
+                    .iter()
+                    .any(|(p, _)| self.image_list.get(self.current_index) == Some(p));
                 ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new(icons::IMAGE).size(48.0));
-                        ui.heading("Rust 画像ビューア");
-                        ui.add_space(10.0);
-                        ui.label("画像ファイルをここにドラッグ＆ドロップするか");
-                        ui.add_space(5.0);
-                        if ui
-                            .button(format!("{} 画像ファイルを選択", icons::FOLDER_OPEN))
-                            .clicked()
-                        {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("Image Files", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
-                                .pick_file()
+                    if loading_first {
+                        // 起動直後などの最初の画像をバックグラウンドでデコード中
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(40.0);
+                            ui.add(egui::Spinner::new().size(44.0));
+                            ui.add_space(14.0);
+                            ui.label(egui::RichText::new("画像を読み込み中...").weak());
+                        });
+                    } else {
+                        ui.vertical_centered(|ui| {
+                            ui.label(egui::RichText::new(icons::IMAGE).size(48.0));
+                            ui.heading("Rust 画像ビューア");
+                            ui.add_space(10.0);
+                            ui.label("画像ファイルをここにドラッグ＆ドロップするか");
+                            ui.add_space(5.0);
+                            if ui
+                                .button(format!("{} 画像ファイルを選択", icons::FOLDER_OPEN))
+                                .clicked()
                             {
-                                self.open_image_file(path);
+                                if let Some(path) = FileDialog::new()
+                                    .add_filter("Image Files", &["png", "jpg", "jpeg", "webp", "gif", "bmp"])
+                                    .pick_file()
+                                {
+                                    self.open_image_file(path);
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 });
                 return;
             };
@@ -930,6 +944,14 @@ impl eframe::App for ImageViewerApp {
                 flip_v: self.flip_v,
                 target: target_size,
             };
+
+            // ローディング表示用のファイル名 (所有権を持たせ、以降の &mut self と借用が競合しないようにする)
+            let loading_filename = loaded
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("画像")
+                .to_string();
 
             // テクスチャの変形・リサイズ生成はバックグラウンドスレッドで実施 (UIの固まり防止)
             if self.rendered_texture_key == Some(texture_key) {
@@ -1041,6 +1063,17 @@ impl eframe::App for ImageViewerApp {
             }
 
             let Some(ref texture) = self.texture_handle else {
+                // 初回表示などテクスチャ未生成の間はローディング表示 (何も無い空白時間をなくす)
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(40.0);
+                        ui.add(egui::Spinner::new().size(44.0));
+                        ui.add_space(14.0);
+                        ui.label(
+                            egui::RichText::new(format!("{} を準備中...", loading_filename)).weak(),
+                        );
+                    });
+                });
                 return;
             };
 
