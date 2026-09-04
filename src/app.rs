@@ -41,6 +41,8 @@ pub struct ImageViewerApp {
     texture_handle: Option<TextureHandle>,
     /// 現在テクスチャへ反映済みの状態 (画像世代 + 変形 + リサイズ後サイズ)
     rendered_texture_key: Option<TextureKey>,
+    /// 現在 texture_handle に入っているピクセルの寸法 (画像切替中の旧フレーム描画用)
+    texture_pixel_size: Option<(u32, u32)>,
     /// バックグラウンドで生成中のテクスチャ (完了次第差し替え)
     pending_texture: Option<(TextureKey, Promise<ColorImage>)>,
     /// 画像が切り替わった回数 (テクスチャキーの画像識別子)
@@ -95,6 +97,7 @@ impl Default for ImageViewerApp {
             current_loaded_image: None,
             texture_handle: None,
             rendered_texture_key: None,
+            texture_pixel_size: None,
             pending_texture: None,
             image_generation: 0,
             last_target_key: None,
@@ -179,9 +182,10 @@ impl ImageViewerApp {
     }
 
     /// 表示画像が変わる際にテクスチャ関連の状態をリセット
+    /// (旧テクスチャは新しい画像の変換が完成するまで表示を維持し、切替時のちらつきを防止。
+    ///  完成次第 TextureHandle::set() で同一テクスチャIDのまま差し替えるためブランクは出ない)
     fn invalidate_texture(&mut self) {
         self.image_generation += 1;
-        self.texture_handle = None;
         self.pending_texture = None;
         self.rendered_texture_key = None;
     }
@@ -834,6 +838,7 @@ impl eframe::App for ImageViewerApp {
                     if done {
                         let (_, promise) = self.pending_texture.take().unwrap();
                         let color_img = promise.block_until_ready().clone();
+                        let [tw, th] = color_img.size;
                         if let Some(handle) = self.texture_handle.as_mut() {
                             handle.set(color_img, egui::TextureOptions::LINEAR);
                         } else {
@@ -843,6 +848,7 @@ impl eframe::App for ImageViewerApp {
                                 egui::TextureOptions::LINEAR,
                             ));
                         }
+                        self.texture_pixel_size = Some((tw as u32, th as u32));
                         self.rendered_texture_key = Some(texture_key);
                     } else {
                         waiting = true;
@@ -904,7 +910,30 @@ impl eframe::App for ImageViewerApp {
             };
 
             // 表示する最終描画サイズ
-            let display_size = Vec2::new(disp_w as f32 * actual_zoom, disp_h as f32 * actual_zoom);
+            // 新テクスチャの生成完了前は旧テクスチャが表示されているため、
+            // 旧ピクセルのアスペクト比を維持したまま描画する (切替時の歪み・ちらつき防止)
+            let stale = self.rendered_texture_key != Some(texture_key);
+            let (draw_w, draw_h, draw_zoom) = if stale {
+                match self.texture_pixel_size {
+                    Some((tw, th)) => {
+                        let zoom = match self.view_mode {
+                            ViewMode::FitWindow => {
+                                let sx = available_size.x / tw as f32;
+                                let sy = available_size.y / th as f32;
+                                sx.min(sy).min(10.0)
+                            }
+                            ViewMode::OriginalSize => 1.0,
+                            ViewMode::FreeZoom => self.zoom_factor,
+                        };
+                        (tw as f32, th as f32, zoom)
+                    }
+                    None => (disp_w as f32, disp_h as f32, actual_zoom),
+                }
+            } else {
+                (disp_w as f32, disp_h as f32, actual_zoom)
+            };
+
+            let display_size = Vec2::new(draw_w * draw_zoom, draw_h * draw_zoom);
 
             let mut pending_navigation: Option<isize> = None;
 
