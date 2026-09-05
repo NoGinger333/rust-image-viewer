@@ -6,7 +6,7 @@ Rust と egui で作成したシンプルな Windows 用画像ビューアです
 
 ビルド済みの実行ファイルは以下からダウンロードできます。
 
-- [rust-image-viewer.exe をダウンロード](https://github.com/NoGinger333/rust-image-viewer/releases/tag/v1.1.0)
+- [rust-image-viewer.exe をダウンロード](https://github.com/NoGinger333/rust-image-viewer/releases/tag/v1.3.0)
 
 
 ※ ダウンロードした `.exe` ファイルをそのまま実行して使用できます。
